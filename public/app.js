@@ -298,7 +298,7 @@ function pbr(scene, {albedo=[1,1,1], rough=0.9, metal=0} = {}) {
 async function buildCity(scene) {
   console.log('[City] Building enhanced Amsterdam...');
 
-  // Ground
+  // ---------- GROUND ----------
   const ground = BABYLON.MeshBuilder.CreateGround('ground', { 
     width: 600, 
     height: 600,
@@ -307,13 +307,13 @@ async function buildCity(scene) {
   ground.material = pbr(scene, { albedo:[0.93, 0.95, 0.97], rough:0.95 });
   ground.receiveShadows = true;
 
-  // Materials
+  // ---------- MATERIALS ----------
   const asphalt  = pbr(scene, { albedo:[0.12, 0.12, 0.14], rough:0.6,  metal:0.1 });
   const sidewalk = pbr(scene, { albedo:[0.70, 0.71, 0.74], rough:0.85 });
   const brick    = pbr(scene, { albedo:[0.78, 0.66, 0.60], rough:0.9 });
   const poleMat  = pbr(scene, { albedo:[0.2, 0.2, 0.22], rough:0.7,  metal:0.3 });
 
-  // Roads & sidewalks
+  // ---------- ROADS & SIDEWALKS ----------
   for (let row = -4; row <= 4; row++) {
     const y = 0.03;
 
@@ -334,8 +334,8 @@ async function buildCity(scene) {
     sw2.position.z = row * 50 - 11;
   }
 
-  // Animated canal water
-  // >>> Belangrijk: eerst buiten het if-blok declareren
+  // ---------- CANALS ----------
+  // Belangrijk: eerst buiten het if-blok declareren
   let waterMat = null;
 
   if (BABYLON.WaterMaterial) {
@@ -344,12 +344,12 @@ async function buildCity(scene) {
       'https://assets.babylonjs.com/textures/waterbump.png', 
       scene
     );
-    waterMat.windForce       = -8;
-    waterMat.waveHeight      = 0.2;
-    waterMat.bumpHeight      = 0.08;
-    waterMat.windDirection   = new BABYLON.Vector2(1, 0.5);
-    waterMat.waterColor      = new BABYLON.Color3(0.12, 0.28, 0.38);
-    waterMat.colorBlendFactor= 0.25;
+    waterMat.windForce        = -8;
+    waterMat.waveHeight       = 0.2;
+    waterMat.bumpHeight       = 0.08;
+    waterMat.windDirection    = new BABYLON.Vector2(1, 0.5);
+    waterMat.waterColor       = new BABYLON.Color3(0.12, 0.28, 0.38);
+    waterMat.colorBlendFactor = 0.25;
 
     waterMat.addToRenderList(ground);
 
@@ -367,7 +367,7 @@ async function buildCity(scene) {
       }
     }
   } else {
-    // Fallback to simple water
+    // Fallback naar simpel water
     const water = pbr(scene, { albedo:[0.15, 0.2, 0.3], rough:0.12, metal:1 });
     for (let row = -4; row <= 4; row++) {
       if (row % 2 === 0) {
@@ -383,7 +383,7 @@ async function buildCity(scene) {
     }
   }
 
-  // Buildings
+  // ---------- BUILDINGS ----------
   for (let x = -5; x <= 5; x++) {
     for (let z = -5; z <= 5; z++) {
       if (Math.abs(x) % 2 === 1 && Math.abs(z) % 2 === 1) continue;
@@ -412,7 +412,7 @@ async function buildCity(scene) {
     }
   }
 
-  // Street lamps
+  // ---------- STREET LAMPS ----------
   for (let i = -6; i <= 6; i++) {
     for (let j = -6; j <= 6; j++) {
       const lampNode = new BABYLON.TransformNode('lamp_' + i + '_' + j, scene);
@@ -433,14 +433,14 @@ async function buildCity(scene) {
       head.parent = lampNode;
 
       const glow = new BABYLON.PointLight('L' + i + '_' + j, new BABYLON.Vector3(0, 4.3, 0), scene);
-      glow.parent   = lampNode;
-      glow.intensity= 0.35;
-      glow.range    = 18;
-      glow.diffuse  = new BABYLON.Color3(1, 0.9, 0.7);
+      glow.parent    = lampNode;
+      glow.intensity = 0.35;
+      glow.range     = 18;
+      glow.diffuse   = new BABYLON.Color3(1, 0.9, 0.7);
     }
   }
 
-  // Add bikes (very Dutch!)
+  // ---------- BIKES ----------
   addBikes(scene);
 
   console.log('[City] Complete!');
@@ -456,7 +456,7 @@ function addBikes(scene) {
 
       const bike = new BABYLON.TransformNode(`bike_${i}_${j}`, scene);
 
-      // Simple frame
+      // Frame
       const frame = BABYLON.MeshBuilder.CreateCylinder('frame', {
         height: 0.9, diameter: 0.04
       }, scene);
@@ -478,7 +478,7 @@ function addBikes(scene) {
       wheel2.position.z = 0.7;
       wheel2.parent     = bike;
 
-      // Position on sidewalk
+      // Positie op trottoir
       bike.position.set(
         i * 45 + (Math.random() * 6 - 3),
         0,
