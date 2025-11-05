@@ -34,7 +34,7 @@ const npcs = [];
 // Generate NPCs
 function generateNPCs() {
     const avatarOptions = ['👨', '👩', '🧑', '👴', '👵', '👦', '👧', '🧔', '👱‍♀️', '👱‍♂️'];
-    const names = ['Chen_Wei', 'Liu_Fang', 'Wang_Ming', 'Zhang_Li', 'Zhao_Yun', 'Wu_Jing', 'Zhou_Hua', 'Xu_Mei'];
+    const names = ['Alex_Murphy', 'Sarah_Chen', 'Mohammed_Ali', 'Emma_Johnson', 'Carlos_Garcia', 'Yuki_Tanaka', 'Olga_Ivanova', 'James_Smith'];
     
     for (let i = 0; i < 8; i++) {
         npcs.push({
