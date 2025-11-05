@@ -5,7 +5,6 @@
   <title>Social Credit Game — Amsterdam Edition</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
 
-  <!-- Import map so bare imports like `three` resolve in the browser -->
   <script type="importmap">
   {
     "imports": {
@@ -93,19 +92,23 @@
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
     import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
     import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
     import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 
     const HDRI = 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/venice_sunset_1k.hdr';
+    const ROBOT = 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/RobotExpressive/RobotExpressive.glb';
 
+    // ----- Multilingual -----
     const L = {
       en: { title:'Social Credit — Amsterdam Edition', subtitle:'Join the network — Choose your identity', enter:'Enter System', public:'Public', connecting:'Connecting…' },
       nl: { title:'Sociale Krediet — Amsterdam Editie', subtitle:'Sluit je aan — Kies je identiteit', enter:'Systeem Betreden', public:'Openbaar', connecting:'Verbinding maken…' },
       de: { title:'Sozialkredit — Amsterdam Edition', subtitle:'Netzwerk beitreten — Identität wählen', enter:'System Betreten', public:'Öffentlich', connecting:'Verbindung wird hergestellt…' }
     };
 
+    // ----- UI refs -----
     const ui = {
       title: document.getElementById('title'),
       subtitle: document.getElementById('subtitle'),
@@ -126,20 +129,21 @@
       mClear: document.getElementById('actClear')
     };
 
+    // ----- Game state -----
     const state = {
       lang: (navigator.language||'en').slice(0,2),
       ws: null,
       playerId: null,
       username: '',
-      avatarEmoji: null,
+      avatarEmoji: '🙂', // kept for label icon
       targetId: null,
-      entities: new Map(),
+      entities: new Map(), // id -> { mesh, name, mixer?, target }
       player: null,
       credits: 1000
     };
 
-    const emojis = ['👨','👩','🧑','👴','👵','👦','👧','🧔','👱‍♀️','👱‍♂️','🧕','👳'];
-    emojis.forEach(e => {
+    // minimal avatar picker UI (emoji just for card — 3D model is glTF)
+    ['🙂','😀','🙃','😎','🧑','👩','👨','🧔'].forEach(e => {
       const d = document.createElement('div');
       d.className='av'; d.textContent=e;
       d.onclick = () => {
@@ -166,14 +170,16 @@
     ui.startBtn.onclick = startGame;
     ui.sendBtn.onclick = () => { if (ui.msg.value.trim()) { sendMessage(ui.msg.value.trim()); ui.msg.value=''; } };
     ui.msg.addEventListener('keydown', e => { if (e.key==='Enter') ui.sendBtn.click(); });
-    function updateStart(){ ui.startBtn.disabled = !ui.nameInput.value.trim() || !state.avatarEmoji; }
+    function updateStart(){ ui.startBtn.disabled = !ui.nameInput.value.trim(); }
 
-    // --- Three.js ---
+    // ----- Three.js -----
     const canvas = document.getElementById('c');
     const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
     renderer.setSize(innerWidth, innerHeight);
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.2;
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.1, 1000);
@@ -189,10 +195,10 @@
     // Post-processing
     const composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
-    const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.9, 0.6, 0.85);
+    const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.8, 0.55, 0.8);
     composer.addPass(bloom);
     const ssao = new SSAOPass(scene, camera, innerWidth, innerHeight);
-    ssao.kernelRadius = 16; composer.addPass(ssao);
+    ssao.kernelRadius = 14; composer.addPass(ssao);
     addEventListener('resize', () => {
       camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
       renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight);
@@ -218,8 +224,47 @@
       b.position.set(i*16, 0.36, 0); b.castShadow = true; scene.add(b);
     }
 
-    // Entities & labels
-    const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
+    // ----- Avatar model (skinned) -----
+    const gltfLoader = new GLTFLoader();
+    let avatarTemplate = null; // GLTF scene cached
+    let avatarClips = null;
+    gltfLoader.load(ROBOT, (g) => {
+      avatarTemplate = g.scene;
+      avatarClips = g.animations;
+    });
+
+    function buildAvatar(name, emoji) {
+      const parent = new THREE.Group();
+      parent.userData.name = name;
+
+      if (avatarTemplate) {
+        const inst = avatarTemplate.clone(true);
+        inst.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+        parent.add(inst);
+
+        // idle animation if available
+        const mixer = new THREE.AnimationMixer(inst);
+        if (avatarClips && avatarClips[0]) {
+          const action = mixer.clipAction(avatarClips[0]);
+          action.play();
+        }
+        parent.userData.mixer = mixer;
+      } else {
+        // fallback capsule + emoji face
+        const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.5,1.0, 4,8), new THREE.MeshStandardMaterial({ color:0x00ff88, roughness:.6 }));
+        body.castShadow = true; parent.add(body);
+        const c = document.createElement('canvas'); c.width=128; c.height=128;
+        const ctx = c.getContext('2d'); ctx.fillStyle='#00ff88'; ctx.fillRect(0,0,128,128);
+        ctx.font='84px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillStyle='#000'; ctx.fillText(emoji||'🧑',64,64);
+        const t = new THREE.CanvasTexture(c);
+        const head = new THREE.Mesh(new THREE.BoxGeometry(1,1,1), new THREE.MeshStandardMaterial({ map:t }));
+        head.position.y = 1.5; head.castShadow = true; parent.add(head);
+      }
+
+      const label = makeLabel(name); label.position.y = 2.7; parent.add(label);
+      scene.add(parent);
+      return parent;
+    }
 
     function makeLabel(text) {
       const c = document.createElement('canvas'); c.width=256; c.height=64;
@@ -232,45 +277,34 @@
       return new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.55), m);
     }
 
-    function makeEntity(emoji, name) {
-      const g = new THREE.Group();
-      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.5,1.0, 4,8), new THREE.MeshStandardMaterial({ color:0x00ff88, roughness:.6 }));
-      body.castShadow = true; g.add(body);
-
-      const c = document.createElement('canvas'); c.width=128; c.height=128;
-      const ctx = c.getContext('2d'); ctx.fillStyle='#00ff88'; ctx.fillRect(0,0,128,128);
-      ctx.font='84px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillStyle='#000'; ctx.fillText(emoji,64,64);
-      const t = new THREE.CanvasTexture(c);
-      const head = new THREE.Mesh(new THREE.BoxGeometry(1,1,1), new THREE.MeshStandardMaterial({ map:t }));
-      head.position.y = 1.5; head.castShadow = true; g.add(head);
-
-      const label = makeLabel(name); label.position.y = 2.7; g.add(label);
-
-      scene.add(g); return g;
-    }
-
     function addEntity(id, x, z, avatar, name) {
-      const ent = makeEntity(avatar || '🧑', name || id);
-      ent.position.set(x||0, 0, z||0);
-      state.entities.set(id, { mesh: ent, name: name || id });
+      const mesh = buildAvatar(name || id, avatar || '🧑');
+      mesh.position.set(x||0, 0, z||0);
+      state.entities.set(id, { mesh, name: name || id, mixer: mesh.userData.mixer, target: new THREE.Vector3(mesh.position.x, 0, mesh.position.z) });
     }
 
-    // Context menu
+    // ----- Picking for right-click menu -----
+    const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
     const menu = document.getElementById('rightMenu');
+
     renderer.domElement.addEventListener('contextmenu', (ev) => {
       ev.preventDefault();
       const rect = renderer.domElement.getBoundingClientRect();
       mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
       ray.setFromCamera(mouse, camera);
-      const hits = ray.intersectObjects(scene.children, true);
+
+      // Intersect against entity roots
+      const roots = [...state.entities.values()].map(e => e.mesh);
+      const hits = ray.intersectObjects(roots, true);
       let clickedId = null;
-      for (const h of hits) {
+      if (hits.length) {
+        const obj = hits[0].object;
         for (const [id, ent] of state.entities) {
-          if (ent.mesh === h.object.parent) { clickedId = id; break; }
+          if (obj === ent.mesh || ent.mesh.children.includes(obj) || obj.parent === ent.mesh) { clickedId = id; break; }
         }
-        if (clickedId) break;
       }
+
       menu.style.left = ev.clientX + 'px';
       menu.style.top = ev.clientY + 'px';
       menu.style.display = 'block';
@@ -294,41 +328,54 @@
       addEventListener('click', () => { menu.style.display='none'; }, { once:true });
     });
 
-    // Movement
+    // ----- Movement (delta-time + camera smoothing) -----
     const keys = {};
     addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
     addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 
     function spawnPlayer() {
-      const ent = makeEntity(state.avatarEmoji, state.username);
-      state.player = ent;
-      state.entities.set(state.playerId, { mesh: ent, name: state.username });
+      const mesh = buildAvatar(state.username, state.avatarEmoji);
+      state.player = mesh;
+      state.entities.set(state.playerId, { mesh, name: state.username, mixer: mesh.userData.mixer, target: new THREE.Vector3(0,0,0) });
     }
 
-    function updatePlayer() {
+    function movePlayer(dt) {
       if (!state.player) return;
-      const speed = 0.08;
-      if (keys['arrowup']) state.player.position.z -= speed;
-      if (keys['arrowdown']) state.player.position.z += speed;
-      if (keys['arrowleft']) state.player.position.x -= speed;
-      if (keys['arrowright']) state.player.position.x += speed;
+      const speed = 5.0; // m/s
+      const v = new THREE.Vector3(
+        (keys['arrowright']?1:0) - (keys['arrowleft']?1:0),
+        0,
+        (keys['arrowdown']?1:0) - (keys['arrowup']?1:0)
+      ).normalize().multiplyScalar(speed * dt);
 
-      state.player.position.x = Math.max(-60, Math.min(60, state.player.position.x));
-      state.player.position.z = Math.max(-60, Math.min(60, state.player.position.z));
+      state.player.position.add(v);
+      state.player.position.x = THREE.MathUtils.clamp(state.player.position.x, -60, 60);
+      state.player.position.z = THREE.MathUtils.clamp(state.player.position.z, -60, 60);
 
-      camera.position.x = state.player.position.x;
-      camera.position.z = state.player.position.z + 12;
+      // camera smooth follow
+      const camTarget = new THREE.Vector3(state.player.position.x, 3, state.player.position.z + 10);
+      camera.position.lerp(camTarget, 0.08);
       camera.lookAt(state.player.position);
 
+      // throttle WS move
       if (state.ws?.readyState === WebSocket.OPEN) {
-        if (!updatePlayer.last || Date.now() - updatePlayer.last > 100) {
-          updatePlayer.last = Date.now();
+        if (!movePlayer.last || performance.now() - movePlayer.last > 100) {
+          movePlayer.last = performance.now();
           state.ws.send(JSON.stringify({ type:'move', x: state.player.position.x, z: state.player.position.z }));
         }
       }
     }
 
-    // Chat
+    // Interpolate remote entities to their target positions
+    function smoothRemotes() {
+      state.entities.forEach((ent, id) => {
+        if (id === state.playerId) return;
+        if (!ent.target) return;
+        ent.mesh.position.lerp(ent.target, 0.15);
+      });
+    }
+
+    // ----- Chat -----
     function addLine(user, text, opt={}) {
       const div = document.createElement('div');
       div.className = 'line' + (opt.private ? ' priv' : '');
@@ -342,10 +389,11 @@
       const payload = { type:'chat', message:text };
       if (state.targetId) payload.targetId = state.targetId;
       if (state.ws?.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify(payload));
-      addLine(state.username + (state.targetId ? ' (to ' + (state.entities.get(state.targetId)?.name||'') + ')' : ':'), text, { private: !!state.targetId });
+      const suffix = state.targetId ? ` (to ${state.entities.get(state.targetId)?.name||''})` : ':';
+      addLine(state.username + suffix, text, { private: !!state.targetId });
     }
 
-    // Start + WS
+    // ----- Start + WS -----
     function startGame() {
       state.username = ui.nameInput.value.trim();
       state.playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
@@ -389,8 +437,8 @@
             break;
           case 'player_move':
             if (state.entities.has(data.playerId)) {
-              const e = state.entities.get(data.playerId).mesh;
-              e.position.x = data.x; e.position.z = data.z;
+              const e = state.entities.get(data.playerId);
+              e.target.set(data.x, 0, data.z); // store target for interpolation
             }
             break;
           case 'chat':
@@ -420,14 +468,25 @@
       });
     }
 
+    // ----- Loop (delta time) -----
+    let lastT = performance.now();
     function animate(){
       requestAnimationFrame(animate);
-      updatePlayer();
+      const now = performance.now();
+      const dt = Math.min(0.05, (now - lastT) / 1000); // clamp huge pauses
+      lastT = now;
+
+      movePlayer(dt);
+      smoothRemotes();
+
+      // face labels to camera + advance mixers
       state.entities.forEach(ent => {
-        const label = ent.mesh.children[2];
-        if (label) label.lookAt(camera.position);
+        const label = ent.mesh.children[ent.mesh.children.length-1];
+        if (label && label.isMesh) label.lookAt(camera.position);
+        if (ent.mixer) ent.mixer.update(dt);
       });
-      // post-processing
+
+      controls.update();
       composer.render();
     }
 
