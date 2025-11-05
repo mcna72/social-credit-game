@@ -4,12 +4,12 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = 8080;
+const PORT = process.env.PORT || 8080; // Use Render's PORT or fallback to 8080
 
 // Create HTTP server to serve the game file
 const server = http.createServer((req, res) => {
     if (req.url === '/' || req.url === '/index.html') {
-        fs.readFile(path.join(__dirname, 'social-credit-multiplayer.html'), (err, data) => {
+        fs.readFile(path.join(__dirname, 'index.html'), (err, data) => {
             if (err) {
                 res.writeHead(500);
                 res.end('Error loading game');
