@@ -1,4 +1,5 @@
-// public/app.js — movement fixes + better city + reliable spawns
+// public/app.js — client: city scene, reliable spawns, WASD avatar movement,
+// private chat/report, name-rule scoring (server), robust picking, smooth camera.
 
 const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
 
@@ -35,14 +36,14 @@ const state = {
   shadow: null,
 
   entities: new Map(),   // id -> { node, name, target: Vector3 }
-  player: null,          // reference to your own entity
+  player: null,
 
   avatarReady: false,
   avatarTemplate: null,
   pendingSpawns: [],
 };
 
-// ---------- chat helpers ----------
+// ---------- Chat helpers ----------
 function addLine(user, text) {
   const div = document.createElement('div');
   div.className = 'line';
@@ -59,7 +60,7 @@ function sendMessage(text){
   addLine(state.targetId ? `${state.username} (privé):` : `${state.username}:`, text);
 }
 
-// ---------- scene setup ----------
+// ---------- Babylon scene ----------
 const canvas = document.getElementById('renderCanvas');
 const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer:true, stencil:true }, true);
 state.engine = engine;
@@ -68,14 +69,14 @@ const createScene = async () => {
   const scene = new BABYLON.Scene(engine);
   state.scene = scene;
 
-  // tone mapping
+  // Tone mapping
   const ip = scene.imageProcessingConfiguration;
   ip.toneMappingEnabled = true;
   ip.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
   ip.exposure = 1.2;
   scene.clearColor = new BABYLON.Color4(0.02,0.04,0.10,1);
 
-  // 3rd-person camera (disable keyboard so it never steals arrows)
+  // 3rd-person camera (keyboard disabled; only mouse controls camera)
   const cam = new BABYLON.ArcRotateCamera('cam',
     BABYLON.Tools.ToRadians(-35),
     BABYLON.Tools.ToRadians(55),
@@ -87,11 +88,10 @@ const createScene = async () => {
   cam.upperRadiusLimit = 120;
   cam.lowerBetaLimit = BABYLON.Tools.ToRadians(15);
   cam.upperBetaLimit = BABYLON.Tools.ToRadians(89);
-  // ⛔ disable camera keyboard handling:
-  cam.keysUp = cam.keysDown = cam.keysLeft = cam.keysRight = [];
+  cam.keysUp = cam.keysDown = cam.keysLeft = cam.keysRight = []; // ⛔ camera won't consume arrows
   state.camera = cam;
 
-  // lighting
+  // Lights
   const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0,1,0), scene);
   hemi.intensity = 0.5;
   const sun = new BABYLON.DirectionalLight('sun', new BABYLON.Vector3(-0.3,-1,-0.2), scene);
@@ -101,27 +101,27 @@ const createScene = async () => {
   shadow.useExponentialShadowMap = true;
   state.shadow = shadow;
 
-  // IBL, fog, sky
+  // IBL, fog
   scene.environmentTexture = BABYLON.CubeTexture.CreateFromPrefilteredData(
     'https://assets.babylonjs.com/environments/environmentSpecular.env', scene);
   scene.fogMode = BABYLON.Scene.FOGMODE_EXP2;
   scene.fogDensity = 0.002;
   scene.fogColor = new BABYLON.Color3(0.02,0.04,0.10);
 
-  // nicer city
+  // City
   buildCity(scene);
 
-  // post FX
+  // Post FX
   const pipeline = new BABYLON.DefaultRenderingPipeline("pipe", true, scene, [cam]);
   pipeline.fxaaEnabled = true;
   pipeline.bloomEnabled = true;
   pipeline.bloomWeight = 0.22;
   pipeline.samples = 4;
 
-  // load avatar template (with spawn buffer)
+  // Avatar template (with spawn buffering)
   await loadAvatarTemplate(scene);
 
-  // right-click menu
+  // Right-click menu
   canvas.addEventListener('contextmenu', (ev)=>{
     ev.preventDefault();
     const pick = scene.pick(ev.clientX, ev.clientY, m => !!m.metadata?.entityId);
@@ -147,10 +147,10 @@ const createScene = async () => {
     window.addEventListener('click', ()=> menu.style.display='none', { once:true });
   });
 
-  // input & chat
+  // Input & chat
   setupControls();
 
-  // render loop
+  // Render loop
   let last = performance.now();
   engine.runRenderLoop(()=>{
     const now = performance.now();
@@ -160,41 +160,37 @@ const createScene = async () => {
     scene.render();
   });
   window.addEventListener('resize', ()=>engine.resize());
-
   return scene;
 };
 
 createScene();
 
-// ---------- CITY ----------
+// ---------- City helpers ----------
 function pbr(scene,{albedo=[1,1,1], rough=.9, metal=0}={}) {
   const m = new BABYLON.PBRMaterial('m'+Math.random(), scene);
-  m.albedoColor = new BABYLON.Color3(albedo[0],albedo[1],albedo[2]);
+  m.albedoColor = new BABYLON.Color3(...albedo);
   m.roughness = rough; m.metallic = metal;
   return m;
 }
 function buildCity(scene){
-  // big ground
+  // ground
   const ground = BABYLON.MeshBuilder.CreateGround('ground', { width: 600, height: 600 }, scene);
   ground.material = pbr(scene,{albedo:[.93,.95,.97], rough:.95});
 
-  // roads / sidewalks / canals
+  // roads/sidewalks/canals
   const asphalt = pbr(scene,{albedo:[.12,.12,.14], rough:.6, metal:.1});
   const sidewalk = pbr(scene,{albedo:[.70,.71,.74], rough:.85});
   const water = pbr(scene,{albedo:[.15,.2,.3], rough:.12, metal:1});
 
   for (let row=-4; row<=4; row++){
     const y = .03;
-    // road
     const r = BABYLON.MeshBuilder.CreateBox('road'+row,{ width: 600, height:.06, depth: 16 }, scene);
     r.position.set(0,y,row*50); r.material = asphalt; r.receiveShadows = true;
 
-    // sidewalks
     const s1 = BABYLON.MeshBuilder.CreateBox('swA'+row,{ width: 600, height:.10, depth: 5 }, scene);
     s1.position.set(0,.05,row*50+11); s1.material = sidewalk;
     const s2 = s1.clone('swB'+row); s2.position.z = row*50-11;
 
-    // canals every other block
     if (row%2===0){
       const c1 = BABYLON.MeshBuilder.CreateBox('c1'+row,{ width: 600, height:.04, depth: 8 }, scene);
       c1.position.set(0,.02,row*50+23); c1.material = water;
@@ -206,7 +202,7 @@ function buildCity(scene){
   const brick = pbr(scene,{albedo:[.78,.66,.60], rough:.9});
   for (let x=-5;x<=5;x++){
     for(let z=-5; z<=5; z++){
-      if (Math.abs(x)%2===1 && Math.abs(z)%2===1) continue; // leave room near roads
+      if (Math.abs(x)%2===1 && Math.abs(z)%2===1) continue;
       const h = 8 + Math.random()*18;
       const b = BABYLON.MeshBuilder.CreateBox(`b_${x}_${z}`, { width: 16+Math.random()*8, height: h, depth: 16+Math.random()*8 }, scene);
       b.position.set(x*45 + (Math.random()*6-3), h/2, z*45 + (Math.random()*6-3));
@@ -229,7 +225,7 @@ function buildCity(scene){
   }
 }
 
-// ---------- AVATAR ----------
+// ---------- Avatar ----------
 async function loadAvatarTemplate(scene){
   const URL = "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/CesiumMan/glTF-Binary/CesiumMan.glb";
   try{
@@ -241,7 +237,6 @@ async function loadAvatarTemplate(scene){
     console.warn('Avatar fallback gebruikt', e);
     state.avatarTemplate = null; state.avatarReady = true;
   }
-  // flush buffered spawns if any
   state.pendingSpawns.splice(0).forEach(s=>reallyAddEntity(s.id,s.x,s.z,s.name));
 }
 
@@ -300,7 +295,7 @@ function removeEntity(id){
   if (!e) return; e.node.dispose(); state.entities.delete(id);
 }
 
-// ---------- INPUT / MOVEMENT ----------
+// ---------- Input / Movement ----------
 const keys = {};
 function setupControls(){
   window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
@@ -308,18 +303,12 @@ function setupControls(){
   ui.sendBtn.onclick = ()=>{ const t = ui.msg.value.trim(); if(!t) return; sendMessage(t); ui.msg.value=''; };
   ui.msg.addEventListener('keydown', e=>{ if(e.key==='Enter') ui.sendBtn.click(); });
 
-  // join
+  // Join – wait for WS open (no premature spawn)
   ui.startBtn.addEventListener('click', ()=>{
     state.username = ui.nameInput.value.trim();
     state.playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
     ui.overlay.style.display='none';
-
-    // ✅ spawn *immediately* so you can move even if server is slow
-    addEntityBuffered(state.playerId, 0, 0, state.username);
-    state.player = state.entities.get(state.playerId);
-    state.camera.target.copyFrom(state.player.node.position);
-
-    connectWS(); // then connect & reconcile
+    connectWS();
   });
 
   ['🙂','😀','🙃','😎','🧑','👩','👨','🧔'].forEach(e=>{
@@ -364,7 +353,7 @@ function interpolateRemotes(){
   });
 }
 
-// ---------- WEBSOCKET ----------
+// ---------- WebSocket ----------
 function connectWS(){
   state.ws = new WebSocket(WS_URL);
 
@@ -375,8 +364,7 @@ function connectWS(){
       playerId: state.playerId,
       username: state.username,
       avatar: state.avatarEmoji,
-      x: state.player?.node.position.x || 0,
-      z: state.player?.node.position.z || 0,
+      x: 0, z: 0
     }));
     addLine('SYSTEM:','Verbonden. Wereld laden…');
   });
@@ -384,32 +372,28 @@ function connectWS(){
   state.ws.addEventListener('message', (e)=>{
     const data = JSON.parse(e.data);
     switch(data.type){
-      case 'init':
-        data.players.forEach(p => { if (p.id!==state.playerId) addEntityBuffered(p.id,p.x,p.z,p.username); });
+      case 'init': {
+        // everyone
+        data.players.forEach(p => addEntityBuffered(p.id,p.x,p.z,p.username));
         data.npcs.forEach(n => addEntityBuffered(n.id,n.x,n.z,n.name));
-        // reconcile our player (ensure we use server position if provided)
-        const mine = state.entities.get(state.playerId);
-        if (mine && data.players){
-          const meSrv = data.players.find(p=>p.id===state.playerId);
-          if (meSrv){ mine.node.position.set(meSrv.x,0,meSrv.z); }
-        }
+        // my ref + camera
+        state.player = state.entities.get(state.playerId);
+        if (!state.player) { addEntityBuffered(state.playerId,0,0,state.username); state.player = state.entities.get(state.playerId); }
+        state.camera.target.copyFrom(state.player.node.position);
         break;
-
+      }
       case 'player_joined':
         if (data.player.id === state.playerId) break;
         addEntityBuffered(data.player.id,data.player.x,data.player.z,data.player.username);
         addLine('SYSTEM:', `${data.player.username} heeft zich aangesloten`);
         break;
-
       case 'player_left':
         removeEntity(data.playerId);
         break;
-
       case 'player_move':
         const ent = state.entities.get(data.playerId);
         if (ent) ent.target = new BABYLON.Vector3(data.x,0,data.z);
         break;
-
       case 'chat':
         if (data.private){
           const meSender = data.playerId===state.playerId;
@@ -417,13 +401,11 @@ function connectWS(){
           if (meSender || meRecipient) addLine(`${data.username} (privé):`, data.message);
         } else addLine(data.username+':', data.message);
         break;
-
       case 'penalty':
         state.credits += data.amount;
         ui.credit.textContent = state.credits;
         addLine('SYSTEM:', `${data.reason} (${data.amount>0?'+':''}${data.amount})`);
         break;
-
       case 'report_result':
         addLine('SYSTEM:', data.correct ? `+50 credits! Correct: ${data.reportedName}` : `-30 credits. Onjuist rapport over ${data.reportedName}`);
         break;
@@ -431,7 +413,7 @@ function connectWS(){
   });
 
   state.ws.addEventListener('close', ()=>{
-    ui.conn.textContent = 'Connecting…';
+    ui.conn.textContent = 'Connecting...';
     setTimeout(connectWS, 2000);
   });
 }
