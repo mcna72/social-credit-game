@@ -1,0 +1,19 @@
+{
+  "name": "social-credit-game-server",
+  "version": "1.0.0",
+  "description": "Multiplayer Social Credit Simulation Game Server",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "game",
+    "multiplayer",
+    "websocket"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.13.0"
+  }
+}
