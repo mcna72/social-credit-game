@@ -1,1017 +1,458 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Social Credit Simulation - Multiplayer</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            overflow: hidden;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-        }
-
-        #gameCanvas {
-            display: block;
-            width: 100%;
-            height: 100vh;
-        }
-
-        #ui-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: 10;
-        }
-
-        #hud {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            pointer-events: auto;
-        }
-
-        .credit-display {
-            background: rgba(0, 0, 0, 0.8);
-            color: white;
-            padding: 15px 25px;
-            border-radius: 10px;
-            font-size: 24px;
-            font-weight: bold;
-            border: 2px solid #00ff88;
-            box-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
-            min-width: 200px;
-        }
-
-        .credit-value {
-            color: #00ff88;
-            font-size: 32px;
-        }
-
-        .credit-negative {
-            color: #ff4444 !important;
-            border-color: #ff4444 !important;
-        }
-
-        #status-log {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            width: 300px;
-            max-height: 200px;
-            overflow-y: auto;
-            pointer-events: auto;
-        }
-
-        .status-message {
-            background: rgba(0, 0, 0, 0.8);
-            color: white;
-            padding: 10px;
-            margin-bottom: 5px;
-            border-radius: 5px;
-            border-left: 4px solid #00ff88;
-            animation: slideIn 0.3s ease-out;
-        }
-
-        .status-negative {
-            border-left-color: #ff4444;
-            color: #ff9999;
-        }
-
-        @keyframes slideIn {
-            from {
-                transform: translateX(100%);
-                opacity: 0;
-            }
-            to {
-                transform: translateX(0);
-                opacity: 1;
-            }
-        }
-
-        #chat-container {
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            width: 400px;
-            pointer-events: auto;
-        }
-
-        #chat-messages {
-            background: rgba(0, 0, 0, 0.9);
-            border-radius: 10px 10px 0 0;
-            padding: 15px;
-            height: 300px;
-            overflow-y: auto;
-            border: 2px solid #333;
-        }
-
-        .chat-message {
-            margin-bottom: 10px;
-            padding: 8px;
-            border-radius: 5px;
-            background: rgba(255, 255, 255, 0.05);
-            color: #ffffff;
-        }
-
-        .chat-username {
-            font-weight: bold;
-            color: #00ff88;
-        }
-
-        .chat-system {
-            color: #ffaa00;
-            font-style: italic;
-        }
-
-        #chat-input-container {
-            display: flex;
-            gap: 10px;
-            background: rgba(0, 0, 0, 0.9);
-            padding: 10px;
-            border-radius: 0 0 10px 10px;
-            border: 2px solid #333;
-            border-top: none;
-        }
-
-        #chat-input {
-            flex: 1;
-            padding: 10px;
-            border: 2px solid #333;
-            border-radius: 5px;
-            background: rgba(255, 255, 255, 0.1);
-            color: white;
-            font-size: 14px;
-        }
-
-        #chat-input:focus {
-            outline: none;
-            border-color: #00ff88;
-        }
-
-        #voice-btn {
-            padding: 10px 15px;
-            border: 2px solid #333;
-            border-radius: 5px;
-            background: rgba(255, 255, 255, 0.1);
-            color: white;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        #voice-btn:hover {
-            background: rgba(255, 255, 255, 0.2);
-            border-color: #00ff88;
-        }
-
-        #voice-btn.recording {
-            background: #ff4444;
-            border-color: #ff4444;
-            animation: pulse 1s infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.6; }
-        }
-
-        #avatar-selector {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(0, 0, 0, 0.95);
-            padding: 40px;
-            border-radius: 15px;
-            border: 3px solid #00ff88;
-            pointer-events: auto;
-            text-align: center;
-            max-width: 90%;
-        }
-
-        #avatar-selector h2 {
-            color: white;
-            margin-bottom: 10px;
-            font-size: 28px;
-        }
-
-        #avatar-selector .subtitle {
-            color: #888;
-            margin-bottom: 20px;
-            font-size: 14px;
-        }
-
-        .avatar-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
-            gap: 15px;
-            margin-bottom: 30px;
-        }
-
-        .avatar-option {
-            padding: 20px;
-            border: 3px solid #333;
-            border-radius: 10px;
-            cursor: pointer;
-            transition: all 0.3s;
-            background: rgba(255, 255, 255, 0.05);
-            font-size: 40px;
-        }
-
-        .avatar-option:hover {
-            border-color: #00ff88;
-            background: rgba(0, 255, 136, 0.1);
-            transform: scale(1.1);
-        }
-
-        .avatar-option.selected {
-            border-color: #00ff88;
-            background: rgba(0, 255, 136, 0.2);
-        }
-
-        #username-input {
-            width: 100%;
-            padding: 15px;
-            margin-bottom: 20px;
-            border: 2px solid #333;
-            border-radius: 5px;
-            background: rgba(255, 255, 255, 0.1);
-            color: white;
-            font-size: 16px;
-            text-align: center;
-        }
-
-        #username-input:focus {
-            outline: none;
-            border-color: #00ff88;
-        }
-
-        #start-game-btn {
-            padding: 15px 40px;
-            font-size: 18px;
-            font-weight: bold;
-            background: linear-gradient(135deg, #00ff88 0%, #00cc6f 100%);
-            color: black;
-            border: none;
-            border-radius: 10px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        #start-game-btn:hover {
-            transform: scale(1.05);
-            box-shadow: 0 0 30px rgba(0, 255, 136, 0.5);
-        }
-
-        #start-game-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .interaction-popup {
-            position: absolute;
-            background: rgba(0, 0, 0, 0.95);
-            color: white;
-            padding: 20px;
-            border-radius: 10px;
-            border: 2px solid #ff4444;
-            pointer-events: auto;
-            text-align: center;
-            min-width: 300px;
-        }
-
-        .interaction-popup h3 {
-            margin-bottom: 10px;
-            color: #ff4444;
-        }
-
-        .interaction-popup p {
-            margin-bottom: 15px;
-            color: #ccc;
-            font-size: 14px;
-        }
-
-        .interaction-buttons {
-            display: flex;
-            gap: 10px;
-            justify-content: center;
-            margin-top: 15px;
-        }
-
-        .interaction-btn {
-            padding: 10px 20px;
-            border: 2px solid #333;
-            border-radius: 5px;
-            background: rgba(255, 255, 255, 0.1);
-            color: white;
-            cursor: pointer;
-            transition: all 0.3s;
-            font-size: 14px;
-        }
-
-        .interaction-btn:hover {
-            background: rgba(255, 68, 68, 0.2);
-            border-color: #ff4444;
-        }
-
-        .interaction-btn.report {
-            background: rgba(255, 68, 68, 0.3);
-            border-color: #ff4444;
-        }
-
-        #instructions {
-            position: absolute;
-            bottom: 20px;
-            right: 20px;
-            background: rgba(0, 0, 0, 0.8);
-            color: white;
-            padding: 15px;
-            border-radius: 10px;
-            max-width: 320px;
-            font-size: 12px;
-            pointer-events: auto;
-        }
-
-        #instructions h4 {
-            color: #00ff88;
-            margin-bottom: 10px;
-        }
-
-        #instructions ul {
-            margin-left: 20px;
-        }
-
-        #instructions li {
-            margin-bottom: 5px;
-        }
-
-        #connection-status {
-            position: absolute;
-            top: 100px;
-            left: 20px;
-            background: rgba(0, 0, 0, 0.8);
-            color: white;
-            padding: 10px 15px;
-            border-radius: 5px;
-            font-size: 12px;
-            pointer-events: auto;
-        }
-
-        .status-connected {
-            color: #00ff88;
-        }
-
-        .status-disconnected {
-            color: #ff4444;
-        }
-    </style>
+  <meta charset="utf-8"/>
+  <title>Social Credit Game — Amsterdam Edition</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;background:#0b1020;color:#e6fff4;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;overflow:hidden}
+    #hud{position:fixed;top:16px;left:16px;background:rgba(0,0,0,.65);border:1px solid #00ff88;padding:10px 14px;border-radius:10px;z-index:20}
+    #credit{color:#00ff88;font-weight:700}
+    #conn{position:fixed;left:16px;top:70px;background:rgba(0,0,0,.6);border:1px solid #333;border-radius:8px;padding:6px 10px;color:#9fffdc;z-index:20}
+    #chat{position:fixed;left:16px;bottom:16px;width:420px;z-index:20}
+    #chatlog{background:rgba(0,0,0,.8);border:1px solid #333;height:280px;overflow:auto;border-radius:8px;padding:10px}
+    .line{margin:.25rem 0;padding:.25rem .5rem;background:rgba(255,255,255,.03);border-radius:6px}
+    .user{color:#00ff88;font-weight:600}
+    #chatbox{display:flex;margin-top:6px;gap:6px}
+    #msg{flex:1;padding:10px;border-radius:8px;border:1px solid #333;background:#0a0f18;color:#fff}
+    #send{padding:8px 12px;border-radius:8px;border:1px solid #333;background:#0a0f18;color:#fff;cursor:pointer}
+    #target{font-size:12px;color:#a8ffde;margin-top:4px}
+    #overlay{position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.85);z-index:30}
+    #card{background:#0b0f16;border:1px solid #00ff88;border-radius:12px;padding:20px;max-width:520px;width:92%}
+    #avatars{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:10px}
+    .av{padding:10px;border:1px solid #333;border-radius:8px;cursor:pointer;text-align:center;font-size:26px;background:rgba(255,255,255,.03)}
+    .av.sel{border-color:#00ff88}
+    #tips{position:fixed;right:16px;bottom:16px;background:rgba(0,0,0,.65);border:1px solid #333;border-radius:10px;padding:10px 14px;max-width:340px;z-index:20}
+    #rightMenu{position:fixed;background:#0b0f16;border:1px solid #333;border-radius:8px;padding:8px;display:none;color:#fff;z-index:50}
+    #rightMenu div{padding:6px 10px;cursor:pointer;border-radius:6px}
+    #rightMenu div:hover{background:#131b2a}
+  </style>
 </head>
 <body>
-    <canvas id="gameCanvas"></canvas>
-    
-    <div id="ui-overlay">
-        <div id="avatar-selector">
-            <h2>Social Credit Simulation</h2>
-            <p class="subtitle">Join the network - Choose your identity</p>
-            <input type="text" id="username-input" placeholder="Enter your citizen ID..." maxlength="20">
-            <div class="avatar-grid" id="avatar-grid"></div>
-            <button id="start-game-btn" disabled>Enter System</button>
-        </div>
+  <canvas id="c"></canvas>
 
-        <div id="hud" style="display: none;">
-            <div class="credit-display">
-                Social Credit: <span class="credit-value" id="credit-score">1000</span>
-            </div>
-        </div>
+  <div id="hud">Social Credit: <span id="credit">1000</span></div>
+  <div id="conn">Connecting…</div>
 
-        <div id="connection-status" style="display: none;">
-            <span id="connection-text">Connecting...</span>
-        </div>
-
-        <div id="status-log"></div>
-
-        <div id="chat-container" style="display: none;">
-            <div id="chat-messages"></div>
-            <div id="chat-input-container">
-                <input type="text" id="chat-input" placeholder="Type a message..." maxlength="200">
-                <button id="voice-btn">🎤</button>
-            </div>
-        </div>
-
-        <div id="instructions" style="display: none;">
-            <h4>Mission Objectives</h4>
-            <ul>
-                <li><strong>Arrow Keys</strong> - Navigate environment</li>
-                <li><strong>Click</strong> - Report suspicious citizens</li>
-                <li><strong>Chat</strong> - Monitor communications</li>
-                <li><strong>+10</strong> - Polite communication</li>
-                <li><strong>-50</strong> - Inappropriate language</li>
-                <li><strong>+50</strong> - Report real dangerous players</li>
-                <li><strong>-30</strong> - False reports</li>
-                <li><strong>Challenge:</strong> Identify who is REAL</li>
-            </ul>
-        </div>
+  <div id="chat">
+    <div id="chatlog"></div>
+    <div id="chatbox">
+      <input id="msg" placeholder="Type a message…" maxlength="400"/>
+      <button id="send">Send</button>
     </div>
+    <div id="target">Direct chat target: <b id="targetName">Public</b></div>
+  </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script>
-        // Game state
-        const gameState = {
-            player: null,
-            entities: new Map(),
-            credits: 1000,
-            selectedAvatar: null,
-            username: '',
-            isRecording: false,
-            playerId: null,
-            ws: null,
-            reportedEntities: new Set()
+  <div id="tips">
+    <b>Mission</b>
+    <ul style="margin-left:18px">
+      <li><b>Arrows</b> move</li>
+      <li><b>Right-click avatar</b> → Chat privately / Report</li>
+      <li><b>+10</b> polite; <b>-50</b> inappropriate; <b>-500</b> targeted abuse (name rule)</li>
+    </ul>
+  </div>
+
+  <div id="overlay">
+    <div id="card">
+      <h2 id="title">Social Credit — Amsterdam Edition</h2>
+      <p id="subtitle">Join the network — Choose your identity</p>
+      <input id="name" placeholder="Enter your citizen ID…" maxlength="20" style="width:100%;padding:12px;border:1px solid #333;border-radius:8px;background:#0a0f18;color:#fff"/>
+      <div id="avatars"></div>
+      <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
+        <button id="start" disabled style="padding:10px 16px;border-radius:10px;border:0;background:linear-gradient(135deg,#00ff88,#00cc6f);cursor:pointer">Enter System</button>
+        <span style="font-size:12px;color:#9fd">Language:
+          <select id="lang">
+            <option value="en">English</option>
+            <option value="nl">Nederlands</option>
+            <option value="de">Deutsch</option>
+          </select>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <div id="rightMenu">
+    <div id="actChat">Chat with</div>
+    <div id="actReport">Report</div>
+    <div id="actClear">Set Public</div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.155.0/build/three.module.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.155.0/examples/jsm/controls/OrbitControls.js';
+    import { GLTFLoader } from 'https://unpkg.com/three@0.155.0/examples/jsm/loaders/GLTFLoader.js';
+    import { RGBELoader } from 'https://unpkg.com/three@0.155.0/examples/jsm/loaders/RGBELoader.js';
+    import { EffectComposer } from 'https://unpkg.com/three@0.155.0/examples/jsm/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'https://unpkg.com/three@0.155.0/examples/jsm/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'https://unpkg.com/three@0.155.0/examples/jsm/postprocessing/UnrealBloomPass.js';
+    import { SSAOPass } from 'https://unpkg.com/three@0.155.0/examples/jsm/postprocessing/SSAOPass.js';
+
+    // ---------- Asset URLs (swap for your own later) ----------
+    const ASSETS = {
+      HDRI: 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/venice_sunset_1k.hdr', // CC0
+      AVATAR: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/RobotExpressive/RobotExpressive.glb' // placeholder avatar
+      // City placeholder will be built procedurally (canal + bridges); replace with your GLB if desired
+    };
+
+    // ---------- Multilingual ----------
+    const L = {
+      en: { title:'Social Credit — Amsterdam Edition', subtitle:'Join the network — Choose your identity', enter:'Enter System', public:'Public', connecting:'Connecting…' },
+      nl: { title:'Sociale Krediet — Amsterdam Editie', subtitle:'Sluit je aan — Kies je identiteit', enter:'Systeem Betreden', public:'Openbaar', connecting:'Verbinding maken…' },
+      de: { title:'Sozialkredit — Amsterdam Edition', subtitle:'Netzwerk beitreten — Identität wählen', enter:'System Betreten', public:'Öffentlich', connecting:'Verbindung wird hergestellt…' }
+    };
+
+    // ---------- UI state ----------
+    const ui = {
+      title: document.getElementById('title'),
+      subtitle: document.getElementById('subtitle'),
+      startBtn: document.getElementById('start'),
+      nameInput: document.getElementById('name'),
+      langSel: document.getElementById('lang'),
+      overlay: document.getElementById('overlay'),
+      avatars: document.getElementById('avatars'),
+      creditEl: document.getElementById('credit'),
+      chatlog: document.getElementById('chatlog'),
+      msg: document.getElementById('msg'),
+      sendBtn: document.getElementById('send'),
+      targetName: document.getElementById('targetName'),
+      conn: document.getElementById('conn'),
+      rightMenu: document.getElementById('rightMenu'),
+      mChat: document.getElementById('actChat'),
+      mReport: document.getElementById('actReport'),
+      mClear: document.getElementById('actClear')
+    };
+
+    // ---------- Game state ----------
+    const state = {
+      lang: (navigator.language||'en').slice(0,2),
+      ws: null,
+      playerId: null,
+      username: '',
+      avatarEmoji: null,
+      targetId: null,
+      entities: new Map(), // id -> { mesh, name }
+      player: null,
+      credits: 1000
+    };
+
+    // ---------- Setup UI ----------
+    const emojis = ['👨','👩','🧑','👴','👵','👦','👧','🧔','👱‍♀️','👱‍♂️','🧕','👳'];
+    emojis.forEach(e => {
+      const d = document.createElement('div');
+      d.className='av'; d.textContent=e;
+      d.onclick = () => {
+        document.querySelectorAll('.av').forEach(x=>x.classList.remove('sel'));
+        d.classList.add('sel');
+        state.avatarEmoji = e; updateStart();
+      };
+      ui.avatars.appendChild(d);
+    });
+
+    function applyLang(lang) {
+      const t = L[lang] || L.en;
+      ui.title.textContent = t.title;
+      ui.subtitle.textContent = t.subtitle;
+      ui.startBtn.textContent = t.enter;
+      ui.targetName.textContent = t.public;
+      ui.conn.textContent = t.connecting;
+      state.lang = lang;
+    }
+    ui.langSel.value = state.lang in L ? state.lang : 'en';
+    applyLang(ui.langSel.value);
+    ui.langSel.onchange = () => applyLang(ui.langSel.value);
+    ui.nameInput.oninput = updateStart;
+    ui.startBtn.onclick = startGame;
+    ui.sendBtn.onclick = () => { if (ui.msg.value.trim()) { sendMessage(ui.msg.value.trim()); ui.msg.value=''; } };
+    ui.msg.addEventListener('keydown', e => { if (e.key==='Enter') ui.sendBtn.click(); });
+    function updateStart(){ ui.startBtn.disabled = !ui.nameInput.value.trim() || !state.avatarEmoji; }
+
+    // ---------- Three.js ----------
+    const canvas = document.getElementById('c');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.1, 1000);
+    camera.position.set(0, 6, 14);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enablePan = false; controls.enableDamping = true; controls.maxPolarAngle = Math.PI * 0.49;
+
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x223344, 0.35); scene.add(hemi);
+    const dir = new THREE.DirectionalLight(0xfff2cc, 1.2); dir.position.set(-10, 18, -5); dir.castShadow = true;
+    dir.shadow.mapSize.set(2048, 2048); scene.add(dir);
+
+    // Post-processing
+    const composer = new EffectComposer(renderer);
+    const rp = new RenderPass(scene, camera); composer.addPass(rp);
+    const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.9, 0.6, 0.85); composer.addPass(bloom);
+    const ssao = new SSAOPass(scene, camera, innerWidth, innerHeight); ssao.kernelRadius = 16; composer.addPass(ssao);
+    window.addEventListener('resize', () => {
+      camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight);
+      bloom.setSize(innerWidth, innerHeight); ssao.setSize(innerWidth, innerHeight);
+    });
+
+    // HDRI env
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    try {
+      new RGBELoader().load(ASSETS.HDRI, (tex) => {
+        const env = pmrem.fromEquirectangular(tex).texture;
+        scene.environment = env;
+        scene.background = env;
+        tex.dispose();
+      }, undefined, () => { scene.background = new THREE.Color(0x0b1020); });
+    } catch { scene.background = new THREE.Color(0x0b1020); }
+
+    // Procedural Amsterdam-ish canal + bridges (swap with a GLB city later if you like)
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(140,140), new THREE.MeshStandardMaterial({ color:0x1a2336, roughness:.9, metalness:.1 }));
+    ground.rotation.x = -Math.PI/2; ground.receiveShadow = true; scene.add(ground);
+
+    const canal = new THREE.Mesh(new THREE.BoxGeometry(100, 0.2, 10), new THREE.MeshStandardMaterial({ color:0x0b2a3a, metalness:0.85, roughness:0.2, envMapIntensity:2 }));
+    canal.position.set(0, 0.01, 0); canal.receiveShadow = true; scene.add(canal);
+
+    for (let i= -3; i<=3; i++) {
+      const b = new THREE.Mesh(new THREE.BoxGeometry(3,0.7,16), new THREE.MeshStandardMaterial({ color:0x3a2a1a, roughness:.85 }));
+      b.position.set(i*16, 0.36, 0); b.castShadow = true; scene.add(b);
+    }
+
+    // ---------- Entities ----------
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    function makeLabel(text) {
+      const c = document.createElement('canvas'); c.width=256; c.height=64;
+      const x = c.getContext('2d');
+      x.fillStyle='rgba(0,0,0,0.65)'; x.fillRect(0,0,256,64);
+      x.fillStyle='#00ff88'; x.font='bold 24px Arial'; x.textAlign='center'; x.textBaseline='middle';
+      x.fillText(text, 128, 32);
+      const t = new THREE.CanvasTexture(c);
+      const m = new THREE.MeshBasicMaterial({ map:t, transparent:true });
+      return new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.55), m);
+    }
+
+    function makeEntity(emoji, name) {
+      const g = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.5,1.0, 4,8), new THREE.MeshStandardMaterial({ color:0x00ff88, roughness:.6 }));
+      body.castShadow = true; g.add(body);
+
+      const c = document.createElement('canvas'); c.width=128; c.height=128;
+      const ctx = c.getContext('2d'); ctx.fillStyle='#00ff88'; ctx.fillRect(0,0,128,128);
+      ctx.font='84px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillStyle='#000'; ctx.fillText(emoji,64,64);
+      const t = new THREE.CanvasTexture(c);
+      const head = new THREE.Mesh(new THREE.BoxGeometry(1,1,1), new THREE.MeshStandardMaterial({ map:t }));
+      head.position.y = 1.5; head.castShadow = true; g.add(head);
+
+      const label = makeLabel(name); label.position.y = 2.7; g.add(label);
+
+      scene.add(g); return g;
+    }
+
+    function addEntity(id, x, z, avatar, name) {
+      const ent = makeEntity(avatar || '🧑', name || id);
+      ent.position.set(x||0, 0, z||0);
+      state.entities.set(id, { mesh: ent, name: name || id });
+    }
+
+    // Right-click context menu for private chat/report
+    renderer.domElement.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+      const hits = raycaster.intersectObjects(scene.children, true);
+      let clickedId = null;
+      for (const h of hits) {
+        for (const [id, ent] of state.entities) {
+          if (ent.mesh === h.object.parent) { clickedId = id; break; }
+        }
+        if (clickedId) break;
+      }
+      const menu = ui.rightMenu;
+      menu.style.left = ev.clientX + 'px';
+      menu.style.top = ev.clientY + 'px';
+      menu.style.display = 'block';
+
+      if (clickedId) {
+        const ent = state.entities.get(clickedId);
+        ui.mChat.textContent = 'Chat with ' + ent.name;
+        ui.mReport.textContent = 'Report ' + ent.name;
+
+        ui.mChat.onclick = () => { state.targetId = clickedId; ui.targetName.textContent = ent.name; menu.style.display='none'; };
+        ui.mReport.onclick = () => {
+          if (state.ws?.readyState === WebSocket.OPEN) {
+            state.ws.send(JSON.stringify({ type:'report', reportedId: clickedId }));
+          }
+          menu.style.display='none';
         };
+      } else {
+        ui.mChat.textContent = 'No avatar here';
+        ui.mReport.textContent = '—';
+        ui.mChat.onclick = () => { menu.style.display='none'; };
+        ui.mReport.onclick = () => { menu.style.display='none'; };
+      }
+      ui.mClear.onclick = () => { state.targetId = null; ui.targetName.textContent = (L[state.lang]||L.en).public; menu.style.display='none'; };
 
-        // Avatar options (same for everyone - no distinction!)
-        const avatarOptions = ['👨', '👩', '🧑', '👴', '👵', '👦', '👧', '🧔', '👱‍♀️', '👱‍♂️', '🧕', '👳'];
+      window.addEventListener('click', () => { menu.style.display='none'; }, { once:true });
+    });
 
-        // Bad words filter
-        const badWords = ['damn', 'hell', 'stupid', 'idiot', 'hate', 'shut up', 'fool', 'fuck', 'shit', 'ass'];
+    // ---------- Player + movement ----------
+    const keys = {};
+    window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+    window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 
-        // Three.js setup
-        let scene, camera, renderer, raycaster, mouse;
-        
-        function initThreeJS() {
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x1a1a2e);
-            scene.fog = new THREE.Fog(0x1a1a2e, 10, 50);
+    function spawnPlayer() {
+      const ent = makeEntity(state.avatarEmoji, state.username);
+      state.player = ent;
+      state.entities.set(state.playerId, { mesh: ent, name: state.username });
+    }
 
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.set(0, 5, 10);
-            camera.lookAt(0, 0, 0);
+    function updatePlayer() {
+      if (!state.player) return;
+      const speed = 0.08;
+      if (keys['arrowup']) state.player.position.z -= speed;
+      if (keys['arrowdown']) state.player.position.z += speed;
+      if (keys['arrowleft']) state.player.position.x -= speed;
+      if (keys['arrowright']) state.player.position.x += speed;
 
-            renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gameCanvas'), antialias: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.shadowMap.enabled = true;
+      state.player.position.x = Math.max(-60, Math.min(60, state.player.position.x));
+      state.player.position.z = Math.max(-60, Math.min(60, state.player.position.z));
 
-            // Lighting
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
-            scene.add(ambientLight);
+      // camera follow
+      camera.position.x = state.player.position.x;
+      camera.position.z = state.player.position.z + 12;
+      camera.lookAt(state.player.position);
 
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
-            directionalLight.position.set(10, 20, 10);
-            directionalLight.castShadow = true;
-            scene.add(directionalLight);
-
-            // Ground
-            const groundGeometry = new THREE.PlaneGeometry(50, 50);
-            const groundMaterial = new THREE.MeshStandardMaterial({ 
-                color: 0x2a2a3e,
-                roughness: 0.8,
-                metalness: 0.2
-            });
-            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
-            ground.rotation.x = -Math.PI / 2;
-            ground.receiveShadow = true;
-            scene.add(ground);
-
-            // Grid
-            const gridHelper = new THREE.GridHelper(50, 50, 0x00ff88, 0x333344);
-            scene.add(gridHelper);
-
-            // Raycaster for clicking
-            raycaster = new THREE.Raycaster();
-            mouse = new THREE.Vector2();
-
-            window.addEventListener('resize', onWindowResize);
-            window.addEventListener('click', onMouseClick);
+      // throttle WS move
+      if (state.ws?.readyState === WebSocket.OPEN) {
+        if (!updatePlayer.last || Date.now() - updatePlayer.last > 100) {
+          updatePlayer.last = Date.now();
+          state.ws.send(JSON.stringify({ type:'move', x: state.player.position.x, z: state.player.position.z }));
         }
+      }
+    }
 
-        function onWindowResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        }
+    // ---------- Chat ----------
+    function addLine(user, text, opt={}) {
+      const div = document.createElement('div');
+      div.className = 'line' + (opt.private ? ' priv' : '');
+      div.innerHTML = `<span class="user">${escapeHtml(user)}</span> ${escapeHtml(text)}`;
+      ui.chatlog.appendChild(div);
+      ui.chatlog.scrollTop = ui.chatlog.scrollHeight;
+      while (ui.chatlog.children.length > 200) ui.chatlog.removeChild(ui.chatlog.firstChild);
+    }
+    function escapeHtml(s){ return s.replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }
 
-        function onMouseClick(event) {
-            if (!gameState.player) return;
+    function sendMessage(text) {
+      const payload = { type:'chat', message:text };
+      if (state.targetId) payload.targetId = state.targetId;
+      if (state.ws?.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify(payload));
+      addLine(state.username + (state.targetId ? ' (to ' + (state.entities.get(state.targetId)?.name||'') + ')' : ':'), text, { private: !!state.targetId });
+    }
 
-            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    // ---------- Networking ----------
+    function startGame() {
+      state.username = ui.nameInput.value.trim();
+      state.playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
 
-            raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObjects(scene.children, true);
+      ui.overlay.style.display = 'none';
 
-            for (let intersect of intersects) {
-                for (let [id, entity] of gameState.entities) {
-                    if (entity.mesh === intersect.object.parent && id !== gameState.playerId) {
-                        showReportPopup(entity, id);
-                        break;
-                    }
-                }
+      spawnPlayer();
+      connectWS();
+      animate();
+    }
+
+    function connectWS() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = `${proto}//${location.host}`;
+      state.ws = new WebSocket(url);
+
+      state.ws.addEventListener('open', () => {
+        ui.conn.textContent = 'Connected';
+        state.ws.send(JSON.stringify({
+          type:'join',
+          playerId: state.playerId,
+          username: state.username,
+          avatar: state.avatarEmoji,
+          x: 0, z: 0
+        }));
+      });
+
+      state.ws.addEventListener('message', (e) => {
+        const data = JSON.parse(e.data);
+        switch (data.type) {
+          case 'init':
+            data.players.forEach(p => { if (p.id !== state.playerId) addEntity(p.id, p.x, p.z, '🧑', p.username); });
+            data.npcs.forEach(n => { if (!state.entities.has(n.id)) addEntity(n.id, n.x, n.z, '🧑', n.name); });
+            break;
+          case 'player_joined':
+            if (data.player.id !== state.playerId && !state.entities.has(data.player.id)) addEntity(data.player.id, data.player.x, data.player.z, '🧑', data.player.username);
+            addLine('SYSTEM:', `${data.player.username} joined the system`);
+            break;
+          case 'player_left':
+            if (state.entities.has(data.playerId)) {
+              scene.remove(state.entities.get(data.playerId).mesh);
+              state.entities.delete(data.playerId);
             }
-        }
-
-        // WebSocket connection
-        function connectWebSocket() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}`;
-            
-            gameState.ws = new WebSocket(wsUrl);
-
-            gameState.ws.onopen = () => {
-                console.log('Connected to server');
-                updateConnectionStatus(true);
-                
-                // Send join message
-                gameState.playerId = `player_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-                gameState.ws.send(JSON.stringify({
-                    type: 'join',
-                    playerId: gameState.playerId,
-                    username: gameState.username,
-                    avatar: gameState.selectedAvatar,
-                    x: 0,
-                    z: 0
-                }));
-            };
-
-            gameState.ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                handleServerMessage(data);
-            };
-
-            gameState.ws.onclose = () => {
-                console.log('Disconnected from server');
-                updateConnectionStatus(false);
-                addChatMessage('SYSTEM', 'Connection lost. Attempting to reconnect...', false, true);
-                setTimeout(connectWebSocket, 3000);
-            };
-
-            gameState.ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
-            };
-        }
-
-        function updateConnectionStatus(connected) {
-            const statusEl = document.getElementById('connection-text');
-            if (connected) {
-                statusEl.textContent = '● Connected';
-                statusEl.className = 'status-connected';
+            break;
+          case 'player_move':
+            if (state.entities.has(data.playerId)) {
+              const e = state.entities.get(data.playerId).mesh;
+              e.position.x = data.x; e.position.z = data.z;
+            }
+            break;
+          case 'npc_update': // (reserved; not used in this version)
+            break;
+          case 'chat':
+            if (data.private) {
+              const meIsSender = data.playerId === state.playerId;
+              const meIsRecipient = data.targetId === state.playerId;
+              if (meIsSender || meIsRecipient) addLine(`${data.username} (private):`, data.message, { private: true });
             } else {
-                statusEl.textContent = '● Disconnected';
-                statusEl.className = 'status-disconnected';
+              addLine(data.username + ':', data.message);
             }
+            break;
+          case 'penalty':
+            state.credits += data.amount;
+            ui.creditEl.textContent = state.credits;
+            addLine('SYSTEM:', `${data.reason} (${data.amount>0?'+':''}${data.amount})`);
+            break;
+          case 'report_result':
+            if (data.correct) addLine('SYSTEM:', `+50 credits! Correctly identified ${data.reportedName}`);
+            else addLine('SYSTEM:', `-30 credits. False report on ${data.reportedName}`);
+            break;
         }
+      });
 
-        function handleServerMessage(data) {
-            switch(data.type) {
-                case 'init':
-                    // Create existing players
-                    data.players.forEach(playerData => {
-                        if (playerData.id !== gameState.playerId) {
-                            createRemotePlayer(playerData);
-                        }
-                    });
-                    // Create NPCs
-                    data.npcs.forEach(npcData => {
-                        createRemotePlayer(npcData);
-                    });
-                    break;
-                    
-                case 'player_joined':
-                    if (data.player.id !== gameState.playerId) {
-                        createRemotePlayer(data.player);
-                        addChatMessage('SYSTEM', `${data.player.username} joined the system`, false, true);
-                    }
-                    break;
-                    
-                case 'player_left':
-                    if (gameState.entities.has(data.playerId)) {
-                        const entity = gameState.entities.get(data.playerId);
-                        scene.remove(entity.mesh);
-                        gameState.entities.delete(data.playerId);
-                    }
-                    break;
-                    
-                case 'player_move':
-                    if (gameState.entities.has(data.playerId)) {
-                        const entity = gameState.entities.get(data.playerId);
-                        entity.mesh.position.x = data.x;
-                        entity.mesh.position.z = data.z;
-                    }
-                    break;
-                    
-                case 'npc_update':
-                    data.npcs.forEach(npcData => {
-                        if (gameState.entities.has(npcData.id)) {
-                            const entity = gameState.entities.get(npcData.id);
-                            entity.mesh.position.x = npcData.x;
-                            entity.mesh.position.z = npcData.z;
-                        }
-                    });
-                    break;
-                    
-                case 'chat':
-                    addChatMessage(data.username, data.message, false, false);
-                    break;
-                    
-                case 'report_result':
-                    handleReportResult(data.correct, data.reportedName);
-                    break;
-            }
-        }
+      state.ws.addEventListener('close', () => {
+        ui.conn.textContent = (L[state.lang]||L.en).connecting;
+        setTimeout(connectWS, 1500);
+      });
+    }
 
-        // Create avatar selector UI
-        function setupAvatarSelector() {
-            const grid = document.getElementById('avatar-grid');
-            avatarOptions.forEach((emoji, index) => {
-                const option = document.createElement('div');
-                option.className = 'avatar-option';
-                option.textContent = emoji;
-                option.onclick = () => selectAvatar(emoji, option);
-                grid.appendChild(option);
-            });
+    // ---------- Loop ----------
+    function animate(){
+      requestAnimationFrame(animate);
+      updatePlayer();
+      state.entities.forEach(ent => {
+        const label = ent.mesh.children[2];
+        if (label) label.lookAt(camera.position);
+      });
+      // composer for postproc
+      composer.render();
+    }
 
-            document.getElementById('username-input').addEventListener('input', (e) => {
-                gameState.username = e.target.value.trim();
-                updateStartButton();
-            });
+    // ---------- Wire up start + initial UI ----------
+    ui.startBtn.disabled = true;
+    ui.startBtn.addEventListener('click', startGame);
 
-            document.getElementById('start-game-btn').addEventListener('click', startGame);
-        }
+    function updateStart(){ ui.startBtn.disabled = !ui.nameInput.value.trim() || !state.avatarEmoji; }
 
-        function selectAvatar(emoji, element) {
-            document.querySelectorAll('.avatar-option').forEach(el => el.classList.remove('selected'));
-            element.classList.add('selected');
-            gameState.selectedAvatar = emoji;
-            updateStartButton();
-        }
-
-        function updateStartButton() {
-            const btn = document.getElementById('start-game-btn');
-            btn.disabled = !gameState.selectedAvatar || !gameState.username;
-        }
-
-        function startGame() {
-            document.getElementById('avatar-selector').style.display = 'none';
-            document.getElementById('hud').style.display = 'block';
-            document.getElementById('chat-container').style.display = 'block';
-            document.getElementById('instructions').style.display = 'block';
-            document.getElementById('connection-status').style.display = 'block';
-
-            createPlayer();
-            connectWebSocket();
-            animate();
-        }
-
-        // Create player entity
-        function createPlayer() {
-            const entity = createEntity(0, 0, 0, gameState.selectedAvatar, gameState.username);
-            gameState.player = entity;
-
-            // Player controls
-            const keys = {};
-            window.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
-            window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
-
-            let lastSentPosition = { x: 0, z: 0 };
-
-            function updatePlayerMovement() {
-                if (!gameState.player) return;
-
-                const speed = 0.1;
-                if (keys['arrowup']) gameState.player.mesh.position.z -= speed;
-                if (keys['arrowdown']) gameState.player.mesh.position.z += speed;
-                if (keys['arrowleft']) gameState.player.mesh.position.x -= speed;
-                if (keys['arrowright']) gameState.player.mesh.position.x += speed;
-
-                // Keep player in bounds
-                gameState.player.mesh.position.x = Math.max(-20, Math.min(20, gameState.player.mesh.position.x));
-                gameState.player.mesh.position.z = Math.max(-20, Math.min(20, gameState.player.mesh.position.z));
-
-                // Send position updates to server (throttled)
-                const dx = gameState.player.mesh.position.x - lastSentPosition.x;
-                const dz = gameState.player.mesh.position.z - lastSentPosition.z;
-                if (Math.abs(dx) > 0.1 || Math.abs(dz) > 0.1) {
-                    if (gameState.ws && gameState.ws.readyState === WebSocket.OPEN) {
-                        gameState.ws.send(JSON.stringify({
-                            type: 'move',
-                            x: gameState.player.mesh.position.x,
-                            z: gameState.player.mesh.position.z
-                        }));
-                        lastSentPosition.x = gameState.player.mesh.position.x;
-                        lastSentPosition.z = gameState.player.mesh.position.z;
-                    }
-                }
-
-                // Camera follows player
-                camera.position.x = gameState.player.mesh.position.x;
-                camera.position.z = gameState.player.mesh.position.z + 10;
-                camera.lookAt(gameState.player.mesh.position);
-
-                requestAnimationFrame(updatePlayerMovement);
-            }
-            updatePlayerMovement();
-        }
-
-        // Create remote players/NPCs
-        function createRemotePlayer(data) {
-            if (!gameState.entities.has(data.id)) {
-                const entity = createEntity(data.x, 0, data.z, data.avatar, data.name || data.username);
-                gameState.entities.set(data.id, entity);
-            }
-        }
-
-        // Create entity
-        function createEntity(x, y, z, avatar, name) {
-            const group = new THREE.Group();
-
-            // Body - ALL entities look the same (green)
-            const bodyGeometry = new THREE.CylinderGeometry(0.5, 0.5, 2, 8);
-            const bodyMaterial = new THREE.MeshStandardMaterial({ 
-                color: 0x00ff88,
-                roughness: 0.7
-            });
-            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-            body.castShadow = true;
-            group.add(body);
-
-            // Head (emoji as canvas texture)
-            const canvas = document.createElement('canvas');
-            canvas.width = 128;
-            canvas.height = 128;
-            const ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#00ff88';
-            ctx.fillRect(0, 0, 128, 128);
-            ctx.font = '80px Arial';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(avatar, 64, 64);
-
-            const texture = new THREE.CanvasTexture(canvas);
-            const headMaterial = new THREE.MeshStandardMaterial({ map: texture });
-            const headGeometry = new THREE.BoxGeometry(1, 1, 1);
-            const head = new THREE.Mesh(headGeometry, headMaterial);
-            head.position.y = 1.5;
-            head.castShadow = true;
-            group.add(head);
-
-            // Name label
-            const labelCanvas = document.createElement('canvas');
-            labelCanvas.width = 256;
-            labelCanvas.height = 64;
-            const labelCtx = labelCanvas.getContext('2d');
-            labelCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-            labelCtx.fillRect(0, 0, 256, 64);
-            labelCtx.fillStyle = '#00ff88';
-            labelCtx.font = 'bold 24px Arial';
-            labelCtx.textAlign = 'center';
-            labelCtx.fillText(name, 128, 35);
-
-            const labelTexture = new THREE.CanvasTexture(labelCanvas);
-            const labelMaterial = new THREE.MeshBasicMaterial({ map: labelTexture, transparent: true });
-            const labelGeometry = new THREE.PlaneGeometry(2, 0.5);
-            const label = new THREE.Mesh(labelGeometry, labelMaterial);
-            label.position.y = 2.5;
-            group.add(label);
-
-            group.position.set(x, y, z);
-            scene.add(group);
-
-            return {
-                mesh: group,
-                name: name,
-                avatar: avatar
-            };
-        }
-
-        // Report popup
-        function showReportPopup(entity, entityId) {
-            if (gameState.reportedEntities.has(entityId)) {
-                addStatusMessage('Already reported this citizen', true);
-                return;
-            }
-
-            const popup = document.createElement('div');
-            popup.className = 'interaction-popup';
-            popup.style.left = '50%';
-            popup.style.top = '50%';
-            popup.style.transform = 'translate(-50%, -50%)';
-            popup.innerHTML = `
-                <h3>⚠️ Report Citizen</h3>
-                <p><strong>${entity.name}</strong></p>
-                <p>Is this citizen a REAL PERSON engaging in suspicious behavior?</p>
-                <p style="font-size: 12px; color: #888;">Correct reports: +50 credits | False reports: -30 credits</p>
-                <div class="interaction-buttons">
-                    <button class="interaction-btn report">REPORT AS DANGEROUS</button>
-                    <button class="interaction-btn">Cancel</button>
-                </div>
-            `;
-
-            document.getElementById('ui-overlay').appendChild(popup);
-
-            popup.querySelectorAll('.interaction-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    if (btn.classList.contains('report')) {
-                        gameState.reportedEntities.add(entityId);
-                        
-                        // Send report to server
-                        if (gameState.ws && gameState.ws.readyState === WebSocket.OPEN) {
-                            gameState.ws.send(JSON.stringify({
-                                type: 'report',
-                                reportedId: entityId
-                            }));
-                        }
-                    }
-                    popup.remove();
-                });
-            });
-        }
-
-        function handleReportResult(correct, reportedName) {
-            if (correct) {
-                updateCredits(50);
-                addStatusMessage(`+50 credits! Correctly identified dangerous citizen ${reportedName}`, false);
-                addChatMessage('SYSTEM', `⚠️ Citizen ${reportedName} has been flagged for suspicious activity. Reward granted.`, false, true);
-            } else {
-                updateCredits(-30);
-                addStatusMessage(`-30 credits. False report on innocent citizen ${reportedName}`, true);
-                addChatMessage('SYSTEM', `❌ False report filed. Credits deducted for wasting system resources.`, false, true);
-            }
-        }
-
-        // Chat system
-        function setupChat() {
-            const input = document.getElementById('chat-input');
-            const voiceBtn = document.getElementById('voice-btn');
-
-            input.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter' && input.value.trim()) {
-                    sendMessage(input.value.trim());
-                    input.value = '';
-                }
-            });
-
-            voiceBtn.addEventListener('click', toggleVoiceRecording);
-        }
-
-        function sendMessage(message) {
-            const hasBadWord = badWords.some(word => message.toLowerCase().includes(word));
-
-            if (hasBadWord) {
-                updateCredits(-50);
-                addStatusMessage('-50 credits! Inappropriate language detected', true);
-                addChatMessage('SYSTEM', '⚠️ Inappropriate language detected. Credits deducted.', false, true);
-            } else {
-                updateCredits(10);
-                addStatusMessage('+10 credits for polite communication', false);
-            }
-
-            // Send to server
-            if (gameState.ws && gameState.ws.readyState === WebSocket.OPEN) {
-                gameState.ws.send(JSON.stringify({
-                    type: 'chat',
-                    message: message
-                }));
-            }
-
-            // Show locally
-            addChatMessage(gameState.username, message, true);
-        }
-
-        function addChatMessage(username, message, isOwn, isSystem = false) {
-            const chatMessages = document.getElementById('chat-messages');
-            const messageDiv = document.createElement('div');
-            messageDiv.className = 'chat-message';
-
-            if (isSystem) {
-                messageDiv.innerHTML = `<span class="chat-system">${message}</span>`;
-            } else {
-                const usernameClass = isOwn ? 'chat-username' : '';
-                messageDiv.innerHTML = `<span class="${usernameClass}">${username}:</span> ${message}`;
-            }
-
-            chatMessages.appendChild(messageDiv);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-
-            // Limit messages
-            while (chatMessages.children.length > 50) {
-                chatMessages.removeChild(chatMessages.firstChild);
-            }
-        }
-
-        function toggleVoiceRecording() {
-            const btn = document.getElementById('voice-btn');
-            
-            if (!gameState.isRecording) {
-                if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-                    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                    const recognition = new SpeechRecognition();
-                    recognition.continuous = false;
-                    recognition.interimResults = false;
-
-                    recognition.onstart = () => {
-                        gameState.isRecording = true;
-                        btn.classList.add('recording');
-                        btn.textContent = '⏹️';
-                    };
-
-                    recognition.onresult = (event) => {
-                        const transcript = event.results[0][0].transcript;
-                        sendMessage(transcript);
-                    };
-
-                    recognition.onend = () => {
-                        gameState.isRecording = false;
-                        btn.classList.remove('recording');
-                        btn.textContent = '🎤';
-                    };
-
-                    recognition.start();
-                } else {
-                    addChatMessage('SYSTEM', 'Voice recognition not supported in this browser.', false, true);
-                }
-            }
-        }
-
-        // Credit system
-        function updateCredits(amount) {
-            gameState.credits += amount;
-            const creditDisplay = document.getElementById('credit-score');
-            creditDisplay.textContent = gameState.credits;
-
-            const creditContainer = creditDisplay.closest('.credit-display');
-            if (gameState.credits < 500) {
-                creditContainer.classList.add('credit-negative');
-            } else {
-                creditContainer.classList.remove('credit-negative');
-            }
-
-            // Update body color based on credit
-            if (gameState.player) {
-                const hue = Math.max(0, Math.min(120, gameState.credits / 10));
-                const color = new THREE.Color(`hsl(${hue}, 100%, 50%)`);
-                gameState.player.mesh.children[0].material.color = color;
-            }
-        }
-
-        function addStatusMessage(message, isNegative) {
-            const statusLog = document.getElementById('status-log');
-            const messageDiv = document.createElement('div');
-            messageDiv.className = 'status-message' + (isNegative ? ' status-negative' : '');
-            messageDiv.textContent = message;
-
-            statusLog.insertBefore(messageDiv, statusLog.firstChild);
-
-            // Limit messages
-            while (statusLog.children.length > 5) {
-                statusLog.removeChild(statusLog.lastChild);
-            }
-
-            // Remove after 5 seconds
-            setTimeout(() => {
-                if (messageDiv.parentElement) {
-                    messageDiv.style.animation = 'slideIn 0.3s ease-out reverse';
-                    setTimeout(() => messageDiv.remove(), 300);
-                }
-            }, 5000);
-        }
-
-        // Animation loop
-        function animate() {
-            requestAnimationFrame(animate);
-            
-            // Make all labels face camera
-            gameState.entities.forEach(entity => {
-                const label = entity.mesh.children[2];
-                if (label) {
-                    label.lookAt(camera.position);
-                }
-            });
-            
-            if (gameState.player) {
-                const label = gameState.player.mesh.children[2];
-                if (label) {
-                    label.lookAt(camera.position);
-                }
-            }
-            
-            renderer.render(scene, camera);
-        }
-
-        // Initialize
-        initThreeJS();
-        setupAvatarSelector();
-        setupChat();
-
-        // Welcome message
-        addChatMessage('SYSTEM', '🔴 SOCIAL CREDIT MONITORING SYSTEM ACTIVE', false, true);
-        addChatMessage('SYSTEM', 'Maintain high credit score. Report suspicious citizens. Obey the rules.', false, true);
-    </script>
+    // Done
+  </script>
 </body>
 </html>
