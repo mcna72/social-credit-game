@@ -5,14 +5,11 @@
   <title>Social Credit — Amsterdam Enhanced Edition</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   
-  <!-- Babylon core + loaders + GUI -->
+  <!-- Babylon core + loaders + GUI + materials -->
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
   <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script>
-  <!-- Materials (volledige bundel) -->
   <script src="https://cdn.babylonjs.com/materialsLibrary/babylonjs.materials.min.js"></script>
-  <!-- WaterMaterial expliciet (zeker weten dat WaterMaterial beschikbaar is) -->
-  <script src="https://cdn.babylonjs.com/materialsLibrary/babylon.waterMaterial.min.js"></script>
 
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
@@ -30,7 +27,7 @@
     
     /* Minimap */
     #minimap{position:fixed;top:16px;right:16px;width:200px;height:200px;background:rgba(0,0,0,.8);border:2px solid #00ff88;border-radius:8px;z-index:30}
-    #minimapCanvas{width:100%;height:100%;border-radius:6px;display:block}
+    #minimapCanvas{width:100%;height:100%;border-radius:6px}
 
     /* Chat */
     #chat{position:fixed;left:16px;bottom:16px;width:min(450px, calc(100vw - 32px));z-index:30}
@@ -88,7 +85,7 @@
     .spinner{border:3px solid rgba(255,255,255,.1);border-top:3px solid #00ff88;border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite;margin:20px auto}
     @keyframes spin{to{transform:rotate(360deg)}}
 
-    /* Mobile */
+    /* Mobile adjustments */
     @media (max-width: 768px) {
       #chat{width:calc(100vw - 32px);max-width:none}
       #tips{max-width:calc(100vw - 32px)}
@@ -100,11 +97,13 @@
   <canvas id="renderCanvas"></canvas>
 
   <!-- HUD -->
-  <div id="hud">Social Credit: <span id="credit">1000</span></div>
+  <div id="hud">
+    Social Credit: <span id="credit">1000</span>
+  </div>
   <div id="conn">Connecting...</div>
   
   <!-- Weather & Time -->
-  <div id="weatherInfo" aria-live="polite">
+  <div id="weatherInfo">
     <span id="weatherIcon">☀️</span>
     <span id="timeDisplay">12:00</span>
   </div>
@@ -125,8 +124,8 @@
   <div id="chat">
     <div id="chatlog"></div>
     <div id="chatbox">
-      <input id="msg" placeholder="Typ een bericht... (Enter)" maxlength="400" />
-      <button id="send" type="button">Send</button>
+      <input id="msg" placeholder="Typ een bericht... (Enter)" maxlength="400"/>
+      <button id="send">Send</button>
     </div>
     <div id="target">Direct chat: <b id="targetName">Openbaar</b></div>
   </div>
@@ -147,10 +146,10 @@
     <div id="card">
       <h2>Social Credit — Amsterdam</h2>
       <p id="subtitle">Enhanced Edition — Sluit je aan bij het netwerk</p>
-      <input id="name" placeholder="Jouw naam..." maxlength="20" />
+      <input id="name" placeholder="Jouw naam..." maxlength="20"/>
       <div id="avatars"></div>
       <div id="startRow">
-        <button id="start" disabled type="button">Systeem betreden</button>
+        <button id="start" disabled>Systeem betreden</button>
         <label id="langLabel">Taal: 
           <select id="lang">
             <option value="nl">🇳🇱 Nederlands</option>
@@ -160,7 +159,6 @@
         </label>
         <a href="/admin.html" style="margin-left:auto;color:#9fd;font-size:13px;text-decoration:none">⚙️ Admin</a>
       </div>
-      <!-- Spinner die app.js laat zien/verbergen -->
       <div class="spinner" style="margin-top:20px;display:none" id="loadingSpinner"></div>
     </div>
   </div>
@@ -172,7 +170,6 @@
     <div id="actClear">🔓 Zet op Openbaar</div>
   </div>
 
-  <!-- Client code -->
   <script src="/app.js" type="module"></script>
 </body>
 </html>
