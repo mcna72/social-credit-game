@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="nl">
 <head>
   <meta charset="utf-8"/>
   <title>Social Credit — Amsterdam (WebGPU/WebGL)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
 
-  <!-- Babylon core + loaders + GUI (CDN) -->
+  <!-- Babylon core + loaders + GUI -->
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
   <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script>
@@ -14,9 +14,11 @@
     *{box-sizing:border-box}
     html,body{height:100%;margin:0;background:#0b1020;color:#e6fff4;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
     #renderCanvas{width:100%;height:100%;touch-action:none;display:block}
+
     #hud{position:fixed;top:16px;left:16px;background:rgba(0,0,0,.65);border:1px solid #00ff88;padding:10px 14px;border-radius:10px;z-index:30}
     #credit{color:#00ff88;font-weight:700}
     #conn{position:fixed;left:16px;top:70px;background:rgba(0,0,0,.6);border:1px solid #333;border-radius:8px;padding:6px 10px;color:#9fffdc;z-index:30}
+
     #chat{position:fixed;left:16px;bottom:16px;width:420px;z-index:30}
     #chatlog{background:rgba(0,0,0,.8);border:1px solid #333;height:280px;overflow:auto;border-radius:8px;padding:10px}
     .line{margin:.25rem 0;padding:.25rem .5rem;background:rgba(255,255,255,.03);border-radius:6px}
@@ -25,13 +27,15 @@
     #msg{flex:1;padding:10px;border-radius:8px;border:1px solid #333;background:#0a0f18;color:#fff}
     #send{padding:8px 12px;border-radius:8px;border:1px solid #333;background:#0a0f18;color:#fff;cursor:pointer}
     #target{font-size:12px;color:#a8ffde;margin-top:4px}
+
+    #tips{position:fixed;right:16px;bottom:16px;background:rgba(0,0,0,.65);border:1px solid #333;border-radius:10px;padding:10px 14px;max-width:340px;z-index:30}
+
     #overlay{position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.85);z-index:40}
     #card{background:#0b0f16;border:1px solid #00ff88;border-radius:12px;padding:20px;max-width:520px;width:92%}
     #avatars{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:10px}
     .av{padding:10px;border:1px solid #333;border-radius:8px;cursor:pointer;text-align:center;font-size:26px;background:rgba(255,255,255,.03)}
     .av.sel{border-color:#00ff88}
-    #tips{position:fixed;right:16px;bottom:16px;background:rgba(0,0,0,.65);border:1px solid #333;border-radius:10px;padding:10px 14px;max-width:340px;z-index:30}
-    /* Right-click menu */
+
     #rightMenu{position:fixed;background:#0b0f16;border:1px solid #333;border-radius:8px;padding:8px;display:none;color:#fff;z-index:50}
     #rightMenu div{padding:6px 10px;cursor:pointer;border-radius:6px}
     #rightMenu div:hover{background:#131b2a}
@@ -46,34 +50,34 @@
   <div id="chat">
     <div id="chatlog"></div>
     <div id="chatbox">
-      <input id="msg" placeholder="Type a message…" maxlength="400"/>
+      <input id="msg" placeholder="Typ een bericht…" maxlength="400"/>
       <button id="send">Send</button>
     </div>
-    <div id="target">Direct chat target: <b id="targetName">Public</b></div>
+    <div id="target">Direct chat target: <b id="targetName">Openbaar</b></div>
   </div>
 
   <div id="tips">
-    <b>Mission</b>
+    <b>Besturing</b>
     <ul style="margin-left:18px">
-      <li><b>Arrows</b> move</li>
-      <li><b>Mouse wheel</b> zoom • <b>Drag</b> rotate • <b>Middle-drag</b> pan</li>
-      <li><b>Right-click avatar</b> → Chat privately / Report</li>
-      <li><b>+10</b> polite; <b>−50</b> inappropriate; <b>−500</b> targeted abuse</li>
+      <li><b>WASD / Pijlen</b> lopen • <b>Shift</b> sprint</li>
+      <li><b>Muiswiel</b> zoom • <b>Sleep</b> roteer • <b>Middel-sleep</b> pan</li>
+      <li><b>Rechtsklik avatar</b> → Privéchat / Rapporteren</li>
+      <li><b>+10</b> netjes; <b>−50</b> ongepast; <b>−500</b> doelgerichte belediging</li>
     </ul>
   </div>
 
   <div id="overlay">
     <div id="card">
-      <h2 id="title">Social Credit — Amsterdam Edition</h2>
-      <p id="subtitle">Join the network — Choose your identity</p>
-      <input id="name" placeholder="Enter your citizen ID…" maxlength="20" style="width:100%;padding:12px;border:1px solid #333;border-radius:8px;background:#0a0f18;color:#fff"/>
+      <h2 id="title">Social Credit — Amsterdam Editie</h2>
+      <p id="subtitle">Sluit je aan — kies je identiteit</p>
+      <input id="name" placeholder="Jouw naam…" maxlength="20" style="width:100%;padding:12px;border:1px solid #333;border-radius:8px;background:#0a0f18;color:#fff"/>
       <div id="avatars"></div>
       <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
-        <button id="start" disabled style="padding:10px 16px;border-radius:10px;border:0;background:linear-gradient(135deg,#00ff88,#00cc6f);cursor:pointer">Enter System</button>
-        <span style="font-size:12px;color:#9fd">Language:
+        <button id="start" disabled style="padding:10px 16px;border-radius:10px;border:0;background:linear-gradient(135deg,#00ff88,#00cc6f);cursor:pointer">Systeem betreden</button>
+        <span style="font-size:12px;color:#9fd">Taal:
           <select id="lang">
-            <option value="en">English</option>
             <option value="nl">Nederlands</option>
+            <option value="en">English</option>
             <option value="de">Deutsch</option>
           </select>
         </span>
@@ -82,9 +86,9 @@
   </div>
 
   <div id="rightMenu">
-    <div id="actChat">Chat with</div>
-    <div id="actReport">Report</div>
-    <div id="actClear">Set Public</div>
+    <div id="actChat">Chat met</div>
+    <div id="actReport">Rapporteer</div>
+    <div id="actClear">Zet op Openbaar</div>
   </div>
 
   <script src="/app.js" type="module"></script>
