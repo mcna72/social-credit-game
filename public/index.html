@@ -5,25 +5,24 @@
   <title>Social Credit — Amsterdam Enhanced Edition</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
 
-  <!-- GEEN Babylon meer. Three.js wordt in app.js als ES-module geladen -->
-
+  <!-- No local three.js needed; app.js imports modules from CDN -->
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     html,body{height:100%;background:#0b1020;color:#e6fff4;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;overflow:hidden}
-    #renderCanvas{width:100%;height:100%;touch-action:none;display:block}
+    #renderCanvas,#threeRoot{position:fixed;inset:0}
 
     /* HUD */
     #hud{position:fixed;top:16px;left:16px;background:rgba(0,0,0,.75);border:2px solid #00ff88;padding:12px 18px;border-radius:12px;z-index:30;backdrop-filter:blur(10px)}
     #credit{color:#00ff88;font-weight:700;font-size:28px}
     #conn{position:fixed;left:16px;top:80px;background:rgba(0,0,0,.65);border:1px solid #333;border-radius:8px;padding:6px 12px;color:#9fffdc;z-index:30;font-size:13px}
 
-    /* Weather & Time */
-    #weatherInfo{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.65);border:1px solid #333;border-radius:8px;padding:8px 16px;z-index:30;display:flex;gap:20px;align-items:center;font-size:14px}
-    #weatherIcon{font-size:24px}
+    /* Weather/Time */
+    #weatherInfo{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.65);border:1px solid #333;border-radius:8px;padding:8px 16px;z-index:30;display:flex;gap:12px;align-items:center;font-size:14px}
+    #weatherIcon{font-size:22px}
 
     /* Minimap */
-    #minimap{position:fixed;top:16px;right:16px;width:220px;height:220px;background:rgba(0,0,0,.8);border:2px solid #00ff88;border-radius:8px;z-index:30}
-    #minimapCanvas{width:100%;height:100%;border-radius:6px}
+    #minimap{position:fixed;top:16px;right:16px;width:220px;height:220px;background:rgba(0,0,0,.8);border:2px solid #00ff88;border-radius:10px;z-index:30}
+    #minimapCanvas{width:100%;height:100%;border-radius:8px}
 
     /* Stats */
     #statsPanel{position:fixed;top:120px;left:16px;background:rgba(0,0,0,.7);border:1px solid #333;border-radius:8px;padding:10px 14px;z-index:30;font-size:12px;min-width:160px}
@@ -31,8 +30,8 @@
     #statsPanel .stat .value{color:#00ff88;font-weight:600}
 
     /* Chat */
-    #chat{position:fixed;left:16px;bottom:16px;width:min(450px, calc(100vw - 32px));z-index:30}
-    #chatlog{background:rgba(0,0,0,.85);border:2px solid #333;height:300px;overflow-y:auto;border-radius:10px 10px 0 0;padding:12px;scrollbar-width:thin;scrollbar-color:#00ff88 #1a1a2e}
+    #chat{position:fixed;left:16px;bottom:16px;width:min(480px, calc(100vw - 32px));z-index:30}
+    #chatlog{background:rgba(0,0,0,.85);border:2px solid #333;height:280px;overflow-y:auto;border-radius:10px 10px 0 0;padding:12px;scrollbar-width:thin;scrollbar-color:#00ff88 #1a1a2e}
     #chatlog::-webkit-scrollbar{width:8px}
     #chatlog::-webkit-scrollbar-track{background:#1a1a2e}
     #chatlog::-webkit-scrollbar-thumb{background:#00ff88;border-radius:4px}
@@ -54,57 +53,35 @@
     #tips ul{margin-left:20px;font-size:13px;line-height:1.6}
     #tips li{margin-bottom:4px}
 
-    /* Overlay */
-    #overlay{position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.92);z-index:40;backdrop-filter:blur(20px)}
-    #card{background:#0d1218;border:3px solid #00ff88;border-radius:16px;padding:30px;max-width:580px;width:94%;box-shadow:0 0 60px rgba(0,255,136,.4)}
-    #card h2{color:#00ff88;font-size:32px;margin-bottom:8px}
-    #subtitle{color:#9fd;margin-bottom:20px;font-size:15px}
-    #name{width:100%;padding:14px;border:2px solid #333;border-radius:10px;background:#0a0f18;color:#fff;font-size:16px;margin-bottom:16px}
-    #name:focus{outline:none;border-color:#00ff88}
-    #avatars{display:grid;grid-template-columns:repeat(auto-fit,minmax(70px,1fr));gap:12px;margin-bottom:16px}
-    .av{padding:14px;border:2px solid #333;border-radius:10px;cursor:pointer;text-align:center;font-size:36px;background:rgba(255,255,255,.03);transition:all .2s}
-    .av:hover{border-color:#00ff88;background:rgba(0,255,136,.08);transform:scale(1.05)}
-    .av.sel{border-color:#00ff88;background:rgba(0,255,136,.15);box-shadow:0 0 20px rgba(0,255,136,.3)}
-    #startRow{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-    #start{padding:14px 28px;border-radius:12px;border:none;background:linear-gradient(135deg,#00ff88,#00cc6f);cursor:pointer;font-weight:700;font-size:17px;color:#000;transition:all .2s}
-    #start:hover:not(:disabled){transform:scale(1.05);box-shadow:0 0 30px rgba(0,255,136,.5)}
-    #start:disabled{opacity:.4;cursor:not-allowed}
-    #langLabel{font-size:13px;color:#9fd}
-    #lang{padding:6px 10px;border-radius:6px;border:1px solid #333;background:#0a0f18;color:#fff}
-
-    /* Klik-popup (we gebruiken #rightMenu) */
+    /* Context menu (right click on avatar) */
     #rightMenu{position:fixed;background:#0d1218;border:2px solid #00ff88;border-radius:10px;padding:8px;display:none;color:#fff;z-index:50;min-width:200px;box-shadow:0 4px 20px rgba(0,0,0,.5)}
     #rightMenu div{padding:10px 14px;cursor:pointer;border-radius:6px;transition:background .15s;font-size:14px}
     #rightMenu div:hover{background:#1a2d3a}
 
-    /* Naamlabels (CSS2DRenderer) */
-    .nametag{
-      padding:4px 8px;
-      border-radius:8px;
-      background:rgba(0,0,0,.75);
-      border:1px solid #00ff88;
-      color:#e6fff4;
-      font-weight:700;
-      font-size:12px;
-      white-space:nowrap;
-      transform:translateY(-8px);
-      pointer-events:none;
-      text-shadow:0 0 6px rgba(0,255,136,.4);
-    }
-
-    /* Loader */
-    .spinner{border:3px solid rgba(255,255,255,.1);border-top:3px solid #00ff88;border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite;margin:20px auto}
+    /* Overlay: JOIN (no avatar grid anymore) */
+    #overlay{position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.92);z-index:40;backdrop-filter:blur(20px)}
+    #card{background:#0d1218;border:3px solid #00ff88;border-radius:16px;padding:30px;max-width:560px;width:94%;box-shadow:0 0 60px rgba(0,255,136,.4)}
+    #card h2{color:#00ff88;font-size:30px;margin-bottom:8px}
+    #subtitle{color:#9fd;margin-bottom:18px;font-size:15px}
+    #name{width:100%;padding:14px;border:2px solid #333;border-radius:10px;background:#0a0f18;color:#fff;font-size:16px;margin-bottom:16px}
+    #name:focus{outline:none;border-color:#00ff88}
+    #startRow{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    #start{padding:14px 28px;border-radius:12px;border:none;background:linear-gradient(135deg,#00ff88,#00cc6f);cursor:pointer;font-weight:700;font-size:17px;color:#000;transition:all .2s}
+    #start:disabled{opacity:.4;cursor:not-allowed}
+    #langLabel{font-size:13px;color:#9fd}
+    #lang{padding:6px 10px;border-radius:6px;border:1px solid #333;background:#0a0f18;color:#fff}
+    .spinner{border:3px solid rgba(255,255,255,.1);border-top:3px solid #00ff88;border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite;margin:20px auto;display:none}
     @keyframes spin{to{transform:rotate(360deg)}}
 
-    @media (max-width: 768px) {
+    @media (max-width: 768px){
       #chat{width:calc(100vw - 32px);max-width:none}
       #tips{max-width:calc(100vw - 32px)}
-      #minimap{width:180px;height:180px}
+      #minimap{width:170px;height:170px}
     }
   </style>
 </head>
 <body>
-  <canvas id="renderCanvas"></canvas>
+  <div id="threeRoot" aria-hidden="true"></div>
 
   <!-- HUD -->
   <div id="hud">Social Credit: <span id="credit">1000</span></div>
@@ -130,7 +107,7 @@
   <div id="chat">
     <div id="chatlog"></div>
     <div id="chatbox">
-      <input id="msg" placeholder="Typ een bericht... (Enter)" maxlength="400"/>
+      <input id="msg" placeholder="Typ een bericht… (Enter)" maxlength="400"/>
       <button id="send">Send</button>
     </div>
     <div id="target">Direct chat: <b id="targetName">Openbaar</b></div>
@@ -140,20 +117,19 @@
   <div id="tips">
     <h4>⌨️ Besturing</h4>
     <ul>
-      <li><b>WASD</b> lopen • <b>Shift</b> sprint</li>
-      <li><b>Muis</b> camera rotatie & zoom</li>
-      <li><b>Klik avatar</b> menu (privé chat/rapporteren)</li>
-      <li><b>+10</b> beleefd • <b>−50</b> ongepast • <b>−500</b> doelgerichte belediging</li>
+      <li><b>WASD</b> bewegen (W vooruit, S achteruit/omkeren, A links, D rechts) • <b>Shift</b> sprint</li>
+      <li><b>Muis</b> camera orbit/zoom</li>
+      <li><b>Rechtsklik avatar</b> → Privé chat / Rapporteer</li>
+      <li><b>+10</b> beleefd • <b>−50</b> privé-gegevens • <b>−500</b> seksueel/CSAM → ban</li>
     </ul>
   </div>
 
-  <!-- Join overlay -->
+  <!-- Join overlay (no avatar grid) -->
   <div id="overlay">
     <div id="card">
       <h2>Social Credit — Amsterdam</h2>
       <p id="subtitle">Enhanced Edition — Sluit je aan bij het netwerk</p>
-      <input id="name" placeholder="Jouw naam..." maxlength="20"/>
-      <div id="avatars"></div>
+      <input id="name" placeholder="Jouw naam…" maxlength="20"/>
       <div id="startRow">
         <button id="start" disabled>Systeem betreden</button>
         <label id="langLabel">Taal:
@@ -165,17 +141,18 @@
         </label>
         <a href="/admin.html" style="margin-left:auto;color:#9fd;font-size:13px;text-decoration:none">⚙️ Admin</a>
       </div>
-      <div class="spinner" style="margin-top:20px;display:none" id="loadingSpinner"></div>
+      <div class="spinner" id="loadingSpinner"></div>
     </div>
   </div>
 
-  <!-- Klik-popup -->
+  <!-- Right-click menu -->
   <div id="rightMenu">
     <div id="actChat">💬 Privé chat</div>
     <div id="actReport">⚠️ Rapporteer</div>
+    <div id="actClear">🔓 Zet op Openbaar</div>
   </div>
 
-  <!-- ES-module client -->
+  <!-- Your client logic (imports three.js from CDN inside) -->
   <script type="module" src="/app.js"></script>
 </body>
 </html>
