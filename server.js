@@ -1,4 +1,4 @@
-// server.js — Social Credit Game (high-render + GPT moderation + direct chat)
+// server.js — Social Credit Game (NPC private replies, GPT moderation, smoothed)
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
@@ -18,7 +18,6 @@ const app = express();
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Admin convenience (local): set key -> writes .env (prefer Render env vars in prod)
 app.post('/admin/set-key', (req, res) => {
   const { password, key } = req.body || {};
   if (password !== ADMIN_PASSWORD) return res.status(403).json({ ok: false, error: 'Forbidden' });
@@ -27,6 +26,8 @@ app.post('/admin/set-key', (req, res) => {
 });
 
 app.get('/', (_, res) => res.sendFile(path.join(__dirname, 'public/index.html')));
+// SPA fallback
+app.use((req, res) => res.sendFile(path.join(__dirname, 'public/index.html')));
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
@@ -37,7 +38,7 @@ const npcs = [];
 
 // --- NPCs ---
 function spawnNPCs() {
-  const names = ['Anna', 'Bram', 'Kees', 'Fatima', 'Sven', 'Lotte', 'Yara', 'Mehmet'];
+  const names = ['Yara','Lotte','Bram','Fatima','Kees','Mehmet','Sven','Anna'];
   for (let i = 0; i < names.length; i++) {
     npcs.push({
       id: `npc_${i}`,
@@ -72,6 +73,20 @@ async function moderate(text) {
 }
 const mentionsVrijland = (t) => /martin\s*v?rijland|m\s*vrijland|vrijland/i.test(t || '');
 
+// very light NPC “brain” for private replies
+function npcReplyFor(name, userText) {
+  const polite = [
+    `Hi, this is ${name}. Nice to meet you.`,
+    `Thanks for the message!`,
+    `I’m just enjoying the canals.`,
+    `All good here — how about you?`,
+  ];
+  const about = userText.toLowerCase();
+  if (about.includes('where') || about.includes('waar')) return `${name}: I’m near the bridge.`;
+  if (about.includes('how') || about.includes('hoe')) return `${name}: Doing well!`;
+  return polite[Math.floor(Math.random()*polite.length)];
+}
+
 wss.on('connection', (ws) => {
   let pid = null;
 
@@ -98,7 +113,7 @@ wss.on('connection', (ws) => {
           })),
           npcs
         }));
-        broadcast({ type: 'player_joined', player: data }, ws);
+        broadcast({ type: 'player_joined', player: { id: pid, username: data.username, x: 0, z: 0 } }, ws);
         break;
       }
 
@@ -128,22 +143,52 @@ wss.on('connection', (ws) => {
           ws.send(JSON.stringify({ type: 'penalty', amount: +10, reason: 'Polite communication' }));
         }
 
-        const payload = {
+        // --- PRIVATE TO NPC ---
+        if (targetId && targetId.startsWith('npc_')) {
+          const npc = npcs.find(n => n.id === targetId);
+          if (npc) {
+            // echo sender's private line back to sender (client already shows it)
+            // send NPC's private reply ONLY to the sender
+            setTimeout(() => {
+              if (ws.readyState === 1) {
+                ws.send(JSON.stringify({
+                  type: 'chat',
+                  playerId: npc.id,
+                  username: npc.name,
+                  message: npcReplyFor(npc.name, text),
+                  private: true,
+                  targetId: pid,
+                  isNPC: true
+                }));
+              }
+            }, 700 + Math.random()*900);
+          }
+          break; // do not broadcast
+        }
+
+        // --- PRIVATE TO PLAYER ---
+        if (targetId && players.has(targetId)) {
+          const target = players.get(targetId);
+          const payload = {
+            type: 'chat',
+            playerId: pid,
+            username: player.username,
+            message: text,
+            private: true,
+            targetId
+          };
+          target.ws?.readyState === 1 && target.ws.send(JSON.stringify(payload));
+          ws?.readyState === 1 && ws.send(JSON.stringify(payload));
+          break;
+        }
+
+        // --- PUBLIC ---
+        broadcast({
           type: 'chat',
           playerId: pid,
           username: player.username,
-          message: text,
-          private: !!targetId,
-          targetId
-        };
-
-        if (targetId && players.has(targetId)) {
-          const target = players.get(targetId);
-          if (target.ws?.readyState === 1) target.ws.send(JSON.stringify(payload));
-          if (ws?.readyState === 1) ws.send(JSON.stringify(payload));
-        } else {
-          broadcast(payload);
-        }
+          message: text
+        });
         break;
       }
 
@@ -171,12 +216,12 @@ wss.on('connection', (ws) => {
   });
 });
 
-// Slow NPC chat loop
+// Slow NPC public chatter (1–3 min, unchanged)
 setInterval(() => {
   const now = Date.now();
   npcs.forEach(n => {
     if (now > n.nextChat) {
-      n.nextChat = now + 60000 + Math.random() * 120000; // 1–3 minutes
+      n.nextChat = now + 60000 + Math.random() * 120000;
       const lines = [
         'Beautiful evening in Amsterdam!',
         'The canal lights are stunning.',
