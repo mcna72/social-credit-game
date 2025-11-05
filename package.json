@@ -1,14 +1,29 @@
 {
-  "name": "social-credit-game",
-  "version": "1.0.0",
-  "description": "Multiplayer social credit simulation (WebSocket + Babylon.js)",
+  "name": "social-credit-game-enhanced",
+  "version": "2.0.0",
+  "description": "Enhanced Multiplayer Social Credit Simulation - Amsterdam Edition",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
+  "keywords": [
+    "game",
+    "multiplayer",
+    "websocket",
+    "babylon",
+    "social-credit",
+    "simulation",
+    "amsterdam"
+  ],
+  "author": "Martin Vrijland",
+  "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
     "openai": "^4.56.0",
     "ws": "^8.17.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
   }
 }
