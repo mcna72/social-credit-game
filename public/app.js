@@ -1,8 +1,7 @@
-// public/app.js — Babylon client met besturing, stad, correcte picking en spawns
+// public/app.js — movement fixes + better city + reliable spawns
 
 const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
 
-// ---------- UI ----------
 const ui = {
   overlay: document.getElementById('overlay'),
   startBtn: document.getElementById('start'),
@@ -21,7 +20,6 @@ const ui = {
   mClear: document.getElementById('actClear'),
 };
 
-// ---------- State ----------
 const state = {
   ws: null,
   playerId: null,
@@ -30,22 +28,21 @@ const state = {
   lang: 'nl',
   targetId: null,
   credits: 1000,
+
   engine: null,
   scene: null,
   camera: null,
   shadow: null,
 
-  // id -> { node, name, target: Vector3, speed }
-  entities: new Map(),
-  player: null,
+  entities: new Map(),   // id -> { node, name, target: Vector3 }
+  player: null,          // reference to your own entity
 
-  // assets
   avatarReady: false,
   avatarTemplate: null,
   pendingSpawns: [],
 };
 
-// ---------- Chat helpers ----------
+// ---------- chat helpers ----------
 function addLine(user, text) {
   const div = document.createElement('div');
   div.className = 'line';
@@ -59,11 +56,10 @@ function sendMessage(text){
   const payload={type:'chat',message:text};
   if(state.targetId) payload.targetId=state.targetId;
   if(state.ws?.readyState===WebSocket.OPEN) state.ws.send(JSON.stringify(payload));
-  const suffix=state.targetId?` (naar ${state.entities.get(state.targetId)?.name||''})`:`:`;
-  addLine(state.username+suffix,text);
+  addLine(state.targetId ? `${state.username} (privé):` : `${state.username}:`, text);
 }
 
-// ---------- Babylon setup ----------
+// ---------- scene setup ----------
 const canvas = document.getElementById('renderCanvas');
 const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer:true, stencil:true }, true);
 state.engine = engine;
@@ -72,69 +68,60 @@ const createScene = async () => {
   const scene = new BABYLON.Scene(engine);
   state.scene = scene;
 
-  // Tone mapping
+  // tone mapping
   const ip = scene.imageProcessingConfiguration;
   ip.toneMappingEnabled = true;
   ip.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
   ip.exposure = 1.2;
   scene.clearColor = new BABYLON.Color4(0.02,0.04,0.10,1);
 
-  // Camera: 3rd person ArcRotate met limieten (niet onder grond)
-  const camera = new BABYLON.ArcRotateCamera('cam',
+  // 3rd-person camera (disable keyboard so it never steals arrows)
+  const cam = new BABYLON.ArcRotateCamera('cam',
     BABYLON.Tools.ToRadians(-35),
     BABYLON.Tools.ToRadians(55),
     45, new BABYLON.Vector3(0,2,0), scene);
-  camera.attachControl(canvas, true);
-  camera.wheelPrecision = 20;
-  camera.panningSensibility = 500;
-  camera.lowerRadiusLimit = 10;
-  camera.upperRadiusLimit = 120;
-  camera.lowerBetaLimit = BABYLON.Tools.ToRadians(15);
-  camera.upperBetaLimit = BABYLON.Tools.ToRadians(89);
-  state.camera = camera;
+  cam.attachControl(canvas, true);
+  cam.wheelPrecision = 20;
+  cam.panningSensibility = 500;
+  cam.lowerRadiusLimit = 10;
+  cam.upperRadiusLimit = 120;
+  cam.lowerBetaLimit = BABYLON.Tools.ToRadians(15);
+  cam.upperBetaLimit = BABYLON.Tools.ToRadians(89);
+  // ⛔ disable camera keyboard handling:
+  cam.keysUp = cam.keysDown = cam.keysLeft = cam.keysRight = [];
+  state.camera = cam;
 
-  // Licht
+  // lighting
   const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0,1,0), scene);
   hemi.intensity = 0.5;
   const sun = new BABYLON.DirectionalLight('sun', new BABYLON.Vector3(-0.3,-1,-0.2), scene);
   sun.position = new BABYLON.Vector3(60,80,60);
-  sun.intensity = 1.3;
-
+  sun.intensity = 1.25;
   const shadow = new BABYLON.ShadowGenerator(4096, sun);
   shadow.useExponentialShadowMap = true;
   state.shadow = shadow;
 
-  // Omgevingslicht / IBL
-  const envTex = BABYLON.CubeTexture.CreateFromPrefilteredData(
+  // IBL, fog, sky
+  scene.environmentTexture = BABYLON.CubeTexture.CreateFromPrefilteredData(
     'https://assets.babylonjs.com/environments/environmentSpecular.env', scene);
-  scene.environmentTexture = envTex;
+  scene.fogMode = BABYLON.Scene.FOGMODE_EXP2;
+  scene.fogDensity = 0.002;
+  scene.fogColor = new BABYLON.Color3(0.02,0.04,0.10);
 
-  // Stad bouwen (lichtgewicht maar geloofwaardig)
+  // nicer city
   buildCity(scene);
 
-  // Render pipeline (FXAA + Bloom)
-  const pipeline = new BABYLON.DefaultRenderingPipeline("pipe", true, scene, [camera]);
+  // post FX
+  const pipeline = new BABYLON.DefaultRenderingPipeline("pipe", true, scene, [cam]);
   pipeline.fxaaEnabled = true;
   pipeline.bloomEnabled = true;
-  pipeline.bloomWeight = 0.25;
+  pipeline.bloomWeight = 0.22;
   pipeline.samples = 4;
 
-  // Avatar-asset
-  const AVATAR_URL = "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/CesiumMan/glTF-Binary/CesiumMan.glb";
-  try{
-    const cont = await BABYLON.SceneLoader.LoadAssetContainerAsync(AVATAR_URL, undefined, scene);
-    const root = new BABYLON.TransformNode("avatarTemplate", scene);
-    cont.meshes.forEach(m=>{ m.setEnabled(false); m.parent = root; m.alwaysSelectAsActiveMesh = true; });
-    state.avatarTemplate = root;
-    state.avatarReady = true;
-    state.pendingSpawns.splice(0).forEach(s=>reallyAddEntity(s.id,s.x,s.z,s.name));
-  }catch(e){
-    console.warn('Avatar heeft fallback nodig', e);
-    state.avatarTemplate = null; state.avatarReady = true;
-    state.pendingSpawns.splice(0).forEach(s=>reallyAddEntity(s.id,s.x,s.z,s.name));
-  }
+  // load avatar template (with spawn buffer)
+  await loadAvatarTemplate(scene);
 
-  // Picking / contextmenu
+  // right-click menu
   canvas.addEventListener('contextmenu', (ev)=>{
     ev.preventDefault();
     const pick = scene.pick(ev.clientX, ev.clientY, m => !!m.metadata?.entityId);
@@ -146,8 +133,8 @@ const createScene = async () => {
     if (pick && pick.hit && pick.pickedMesh?.metadata?.entityId){
       const id = pick.pickedMesh.metadata.entityId;
       const ent = state.entities.get(id);
-      ui.mChat.textContent = 'Chat met ' + (ent?.name || 'Onbekend');
-      ui.mReport.textContent = 'Rapporteer ' + (ent?.name || 'Onbekend');
+      ui.mChat.textContent = 'Chat met ' + (ent?.name || 'onbekend');
+      ui.mReport.textContent = 'Rapporteer ' + (ent?.name || 'onbekend');
       ui.mChat.onclick = ()=>{ state.targetId = id; ui.targetName.textContent = ent?.name || 'Openbaar'; menu.style.display='none'; };
       ui.mReport.onclick = ()=>{ state.ws?.readyState===WebSocket.OPEN && state.ws.send(JSON.stringify({type:'report', reportedId:id})); menu.style.display='none'; };
     } else {
@@ -160,10 +147,10 @@ const createScene = async () => {
     window.addEventListener('click', ()=> menu.style.display='none', { once:true });
   });
 
-  // Besturing
-  setupControls(scene);
+  // input & chat
+  setupControls();
 
-  // Loop
+  // render loop
   let last = performance.now();
   engine.runRenderLoop(()=>{
     const now = performance.now();
@@ -172,7 +159,6 @@ const createScene = async () => {
     interpolateRemotes();
     scene.render();
   });
-
   window.addEventListener('resize', ()=>engine.resize());
 
   return scene;
@@ -180,74 +166,85 @@ const createScene = async () => {
 
 createScene();
 
-// ---------- Stad (grid) ----------
+// ---------- CITY ----------
+function pbr(scene,{albedo=[1,1,1], rough=.9, metal=0}={}) {
+  const m = new BABYLON.PBRMaterial('m'+Math.random(), scene);
+  m.albedoColor = new BABYLON.Color3(albedo[0],albedo[1],albedo[2]);
+  m.roughness = rough; m.metallic = metal;
+  return m;
+}
 function buildCity(scene){
-  // grond
-  const ground = BABYLON.MeshBuilder.CreateGround('ground', { width: 400, height: 400 }, scene);
-  const gmat = new BABYLON.PBRMaterial('gmat', scene);
-  gmat.metallic = 0; gmat.roughness = .95; gmat.albedoColor = new BABYLON.Color3(.93,.95,.97);
-  ground.material = gmat; ground.receiveShadows = true;
+  // big ground
+  const ground = BABYLON.MeshBuilder.CreateGround('ground', { width: 600, height: 600 }, scene);
+  ground.material = pbr(scene,{albedo:[.93,.95,.97], rough:.95});
 
-  // straten (donker), stoepen (licht), kanalen (reflectie)
-  const streetMat = new BABYLON.PBRMaterial('street', scene);
-  streetMat.metallic = 0.1; streetMat.roughness = 0.6; streetMat.albedoColor = new BABYLON.Color3(.12,.12,.14);
+  // roads / sidewalks / canals
+  const asphalt = pbr(scene,{albedo:[.12,.12,.14], rough:.6, metal:.1});
+  const sidewalk = pbr(scene,{albedo:[.70,.71,.74], rough:.85});
+  const water = pbr(scene,{albedo:[.15,.2,.3], rough:.12, metal:1});
 
-  const sidewalkMat = new BABYLON.PBRMaterial('side', scene);
-  sidewalkMat.metallic = 0; sidewalkMat.roughness = 0.85; sidewalkMat.albedoColor = new BABYLON.Color3(.72,.73,.75);
+  for (let row=-4; row<=4; row++){
+    const y = .03;
+    // road
+    const r = BABYLON.MeshBuilder.CreateBox('road'+row,{ width: 600, height:.06, depth: 16 }, scene);
+    r.position.set(0,y,row*50); r.material = asphalt; r.receiveShadows = true;
 
-  const waterMat = new BABYLON.PBRMaterial('water', scene);
-  waterMat.metallic = 1; waterMat.roughness = 0.15; waterMat.environmentIntensity = 1.6; waterMat.reflectionTexture = scene.environmentTexture;
+    // sidewalks
+    const s1 = BABYLON.MeshBuilder.CreateBox('swA'+row,{ width: 600, height:.10, depth: 5 }, scene);
+    s1.position.set(0,.05,row*50+11); s1.material = sidewalk;
+    const s2 = s1.clone('swB'+row); s2.position.z = row*50-11;
 
-  // raster
-  for (let x=-3; x<=3; x++){
-    // straat
-    const s = BABYLON.MeshBuilder.CreateBox('st_'+x, { width: 400, height: .05, depth: 12 }, scene);
-    s.position.z = x*40; s.position.y = .025; s.material = streetMat; s.receiveShadows = true;
-
-    // "gracht" om de twee rijen
-    if (x%2===0){
-      const w = BABYLON.MeshBuilder.CreateBox('wa_'+x, { width: 400, height: .06, depth: 8 }, scene);
-      w.position.z = x*40+18; w.position.y = .03; w.material = waterMat;
-
-      const w2 = BABYLON.MeshBuilder.CreateBox('wb_'+x, { width: 400, height: .06, depth: 8 }, scene);
-      w2.position.z = x*40-18; w2.position.y = .03; w2.material = waterMat;
+    // canals every other block
+    if (row%2===0){
+      const c1 = BABYLON.MeshBuilder.CreateBox('c1'+row,{ width: 600, height:.04, depth: 8 }, scene);
+      c1.position.set(0,.02,row*50+23); c1.material = water;
+      const c2 = c1.clone('c2'+row); c2.position.z = row*50-23;
     }
-
-    // stoepen links/rechts
-    const sl = BABYLON.MeshBuilder.CreateBox('sl'+x, { width: 400, height: .12, depth: 4 }, scene);
-    sl.position.set(0,.06,x*40+8); sl.material = sidewalkMat; sl.receiveShadows = true;
-
-    const sr = sl.clone('sr'+x); sr.position.z = x*40-8;
   }
 
-  // gebouwblokken
-  const buildMat = new BABYLON.PBRMaterial('b', scene);
-  buildMat.metallic = 0; buildMat.roughness = .9; buildMat.albedoColor = new BABYLON.Color3(.75,.62,.55);
-
-  for (let gx=-3; gx<=3; gx++){
-    for (let gz=-3; gz<=3; gz++){
-      const h = 6 + Math.random()*16;
-      const b = BABYLON.MeshBuilder.CreateBox(`b_${gx}_${gz}`, { width: 14+Math.random()*10, height: h, depth: 14+Math.random()*10 }, scene);
-      b.position.set(gx*40 + (Math.random()*10-5), h/2, gz*40 + (Math.random()*10-5));
-      b.material = buildMat; b.receiveShadows = true; b.castShadow = true;
+  // buildings
+  const brick = pbr(scene,{albedo:[.78,.66,.60], rough:.9});
+  for (let x=-5;x<=5;x++){
+    for(let z=-5; z<=5; z++){
+      if (Math.abs(x)%2===1 && Math.abs(z)%2===1) continue; // leave room near roads
+      const h = 8 + Math.random()*18;
+      const b = BABYLON.MeshBuilder.CreateBox(`b_${x}_${z}`, { width: 16+Math.random()*8, height: h, depth: 16+Math.random()*8 }, scene);
+      b.position.set(x*45 + (Math.random()*6-3), h/2, z*45 + (Math.random()*6-3));
+      b.material = brick; b.receiveShadows = true; b.castShadow = true;
       state.shadow?.addShadowCaster(b);
     }
   }
 
-  // lantaarns
-  for (let i=-4; i<=4; i++){
-    for (let j=-4; j<=4; j++){
+  // streetlights
+  const poleMat = pbr(scene,{albedo:[.2,.2,.22], rough:.7});
+  for(let i=-6;i<=6;i++){
+    for(let j=-6;j<=6;j++){
       const p = new BABYLON.TransformNode('lamp_'+i+'_'+j, scene);
-      p.position.set(i*20+ (j%2?10:-10), 0, j*20);
-      const pole = BABYLON.MeshBuilder.CreateCylinder('pole',{ diameter: .25, height: 4 }, scene);
-      pole.position.y = 2; pole.parent = p;
-      const head = BABYLON.MeshBuilder.CreateBox('head',{ width:.6, height:.3, depth:.6 }, scene);
-      head.position.set(0,4.1,0); head.parent = p;
+      p.position.set(i*45,0,j*45+10);
+      const pole = BABYLON.MeshBuilder.CreateCylinder('pole',{ diameter:.25, height:4 }, scene); pole.material=poleMat; pole.position.y=2; pole.parent=p;
+      const head = BABYLON.MeshBuilder.CreateBox('head',{ width:.6,height:.3,depth:.6 }, scene); head.material=poleMat; head.position.y=4.1; head.parent=p;
+      const glow = new BABYLON.PointLight('L'+i+'_'+j, new BABYLON.Vector3(0,4.3,0), scene);
+      glow.parent = p; glow.intensity = 0.35; glow.range = 18;
     }
   }
 }
 
-// ---------- Avatar helpers ----------
+// ---------- AVATAR ----------
+async function loadAvatarTemplate(scene){
+  const URL = "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/CesiumMan/glTF-Binary/CesiumMan.glb";
+  try{
+    const cont = await BABYLON.SceneLoader.LoadAssetContainerAsync(URL, undefined, scene);
+    const root = new BABYLON.TransformNode("avatarTemplate", scene);
+    cont.meshes.forEach(m=>{ m.setEnabled(false); m.parent = root; m.alwaysSelectAsActiveMesh = true; m.receiveShadows=true; m.castShadow=true; });
+    state.avatarTemplate = root; state.avatarReady = true;
+  }catch(e){
+    console.warn('Avatar fallback gebruikt', e);
+    state.avatarTemplate = null; state.avatarReady = true;
+  }
+  // flush buffered spawns if any
+  state.pendingSpawns.splice(0).forEach(s=>reallyAddEntity(s.id,s.x,s.z,s.name));
+}
+
 function tagPickableRecursive(mesh, entityId, name){
   if (!mesh) return;
   mesh.metadata = { entityId, name };
@@ -275,7 +272,7 @@ function buildAvatar(name){
   let root;
   if (state.avatarTemplate){
     root = state.avatarTemplate.clone('a_'+name);
-    root.getChildMeshes().forEach(m=>{ m.setEnabled(true); m.receiveShadows = true; m.castShadow = true; });
+    root.getChildMeshes().forEach(m=>m.setEnabled(true));
   } else {
     root = new BABYLON.TransformNode('a_'+name, scene);
     const body = BABYLON.MeshBuilder.CreateCapsule('cap_'+name,{radius:.45, height:1.7},scene);
@@ -287,57 +284,50 @@ function buildAvatar(name){
   state.shadow?.addShadowCaster(root);
   return root;
 }
-
 function addEntityBuffered(id,x,z,name){
-  if (state.entities.has(id)) return;
-  if (!state.avatarReady){
-    state.pendingSpawns.push({id,x,z,name});
-    return;
-  }
+  if(state.entities.has(id)) return;
+  if(!state.avatarReady){ state.pendingSpawns.push({id,x,z,name}); return; }
   reallyAddEntity(id,x,z,name);
 }
-
 function reallyAddEntity(id,x,z,name){
   const node = buildAvatar(name||id);
   node.position = new BABYLON.Vector3(x||0,0,z||0);
   tagPickableRecursive(node, id, name||id);
-  state.entities.set(id, { node, name: name||id, target: node.position.clone(), speed: 5 });
+  state.entities.set(id, { node, name: name||id, target: node.position.clone() });
 }
-
 function removeEntity(id){
   const e = state.entities.get(id);
-  if (!e) return;
-  e.node.dispose();
-  state.entities.delete(id);
+  if (!e) return; e.node.dispose(); state.entities.delete(id);
 }
 
-// ---------- Besturing (lopen) ----------
+// ---------- INPUT / MOVEMENT ----------
 const keys = {};
-function setupControls(scene){
+function setupControls(){
   window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
   window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
-
-  ui.sendBtn.onclick = ()=>{
-    const t = ui.msg.value.trim(); if(!t) return;
-    sendMessage(t); ui.msg.value='';
-  };
+  ui.sendBtn.onclick = ()=>{ const t = ui.msg.value.trim(); if(!t) return; sendMessage(t); ui.msg.value=''; };
   ui.msg.addEventListener('keydown', e=>{ if(e.key==='Enter') ui.sendBtn.click(); });
 
-  // Join
+  // join
   ui.startBtn.addEventListener('click', ()=>{
     state.username = ui.nameInput.value.trim();
     state.playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
     ui.overlay.style.display='none';
-    connectWS();
+
+    // ✅ spawn *immediately* so you can move even if server is slow
+    addEntityBuffered(state.playerId, 0, 0, state.username);
+    state.player = state.entities.get(state.playerId);
+    state.camera.target.copyFrom(state.player.node.position);
+
+    connectWS(); // then connect & reconcile
   });
 
   ['🙂','😀','🙃','😎','🧑','👩','👨','🧔'].forEach(e=>{
     const d=document.createElement('div'); d.className='av'; d.textContent=e;
-    d.onclick=()=>{ document.querySelectorAll('.av').forEach(x=>x.classList.remove('sel')); d.classList.add('sel'); state.avatarEmoji=e; updateStart(); };
+    d.onclick=()=>{ document.querySelectorAll('.av').forEach(x=>x.classList.remove('sel')); d.classList.add('sel'); state.avatarEmoji=e; ui.startBtn.disabled = !ui.nameInput.value.trim(); };
     ui.avatars.appendChild(d);
   });
-  ui.nameInput.oninput = updateStart;
-  function updateStart(){ ui.startBtn.disabled = !ui.nameInput.value.trim(); }
+  ui.nameInput.oninput = ()=> ui.startBtn.disabled = !ui.nameInput.value.trim();
 }
 
 function tickMovement(dt){
@@ -352,11 +342,11 @@ function tickMovement(dt){
 
   const delta = new BABYLON.Vector3(vx,0,vz).normalize().scale(speed*dt);
   const pos = me.node.position.add(delta);
-  pos.x = BABYLON.Scalar.Clamp(pos.x, -195, 195);
-  pos.z = BABYLON.Scalar.Clamp(pos.z, -195, 195);
+  pos.x = BABYLON.Scalar.Clamp(pos.x, -290, 290);
+  pos.z = BABYLON.Scalar.Clamp(pos.z, -290, 290);
   me.node.position.copyFrom(pos);
 
-  // camera volgt
+  // camera follow
   state.camera.target = BABYLON.Vector3.Lerp(state.camera.target, new BABYLON.Vector3(pos.x,2,pos.z), .08);
 
   const now = performance.now();
@@ -366,7 +356,6 @@ function tickMovement(dt){
       state.ws.send(JSON.stringify({ type:'move', x: pos.x, z: pos.z }));
   }
 }
-
 function interpolateRemotes(){
   state.entities.forEach((e,id)=>{
     if (id===state.playerId) return;
@@ -375,7 +364,7 @@ function interpolateRemotes(){
   });
 }
 
-// ---------- WebSocket ----------
+// ---------- WEBSOCKET ----------
 function connectWS(){
   state.ws = new WebSocket(WS_URL);
 
@@ -386,7 +375,8 @@ function connectWS(){
       playerId: state.playerId,
       username: state.username,
       avatar: state.avatarEmoji,
-      x: 0, z: 0
+      x: state.player?.node.position.x || 0,
+      z: state.player?.node.position.z || 0,
     }));
     addLine('SYSTEM:','Verbonden. Wereld laden…');
   });
@@ -395,12 +385,14 @@ function connectWS(){
     const data = JSON.parse(e.data);
     switch(data.type){
       case 'init':
-        data.players.forEach(p => addEntityBuffered(p.id,p.x,p.z,p.username));
+        data.players.forEach(p => { if (p.id!==state.playerId) addEntityBuffered(p.id,p.x,p.z,p.username); });
         data.npcs.forEach(n => addEntityBuffered(n.id,n.x,n.z,n.name));
-        // maak lokale referentie
-        const me = state.entities.get(state.playerId) || addEntityBuffered(state.playerId,0,0,state.username);
-        state.player = state.entities.get(state.playerId);
-        state.camera.target.copyFrom(state.player.node.position);
+        // reconcile our player (ensure we use server position if provided)
+        const mine = state.entities.get(state.playerId);
+        if (mine && data.players){
+          const meSrv = data.players.find(p=>p.id===state.playerId);
+          if (meSrv){ mine.node.position.set(meSrv.x,0,meSrv.z); }
+        }
         break;
 
       case 'player_joined':
@@ -433,8 +425,7 @@ function connectWS(){
         break;
 
       case 'report_result':
-        if (data.correct) addLine('SYSTEM:', `+50 credits! Correct: ${data.reportedName}`);
-        else addLine('SYSTEM:', `-30 credits. Onjuist rapport over ${data.reportedName}`);
+        addLine('SYSTEM:', data.correct ? `+50 credits! Correct: ${data.reportedName}` : `-30 credits. Onjuist rapport over ${data.reportedName}`);
         break;
     }
   });
