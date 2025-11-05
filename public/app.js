@@ -1,20 +1,15 @@
-// public/app.js
-// Three.js client for Social Credit — Amsterdam (Enhanced)
-// - Flat maze world (no ugly boxes), city-like background
-// - Third-person camera, A/D left-right, W forward, S backward
-// - Avatar collision with maze walls (AABB) + sliding
-// - Name tags via CSS2DRenderer
-// - Context menu for public/private chat + report
-// - Private chat only if within 5x avatar size distance
-// - Minimap, HUD, WS networking, NPC updates, weather/time, scoring
+// public/app.js — Three.js client met maze, botsing, labels, klik-popup, afstandscheck, lokale moderatie
 
-import * as THREE from 'https://unpkg.com/three@0.159.0/build/three.module.js';
-import { OrbitControls } from 'https://unpkg.com/three@0.159.0/examples/jsm/controls/OrbitControls.js';
-import { CSS2DRenderer, CSS2DObject } from 'https://unpkg.com/three@0.159.0/examples/jsm/renderers/CSS2DRenderer.js';
+// ──────────────────────────────────────────────────────────────────────────────
+// Imports (ESM) – vaste versies om Render/CDN issues te voorkomen
+// ──────────────────────────────────────────────────────────────────────────────
+import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'https://unpkg.com/three@0.160.0/examples/jsm/renderers/CSS2DRenderer.js';
 
+// ──────────────────────────────────────────────────────────────────────────────
 const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
 
-// ---------- UI ----------
 const ui = {
   overlay: document.getElementById('overlay'),
   startBtn: document.getElementById('start'),
@@ -30,17 +25,15 @@ const ui = {
   rightMenu: document.getElementById('rightMenu'),
   mChat: document.getElementById('actChat'),
   mReport: document.getElementById('actReport'),
-  mClear: document.getElementById('actClear'),
   weatherIcon: document.getElementById('weatherIcon'),
   timeDisplay: document.getElementById('timeDisplay'),
   minimapCanvas: document.getElementById('minimapCanvas'),
   statReports: document.getElementById('statReports'),
   statAccuracy: document.getElementById('statAccuracy'),
-  // intentionally NOT filling statPlayers to keep number of real players hidden
-  loadingSpinner: document.getElementById('loadingSpinner')
+  statPlayers: document.getElementById('statPlayers'),
+  loadingSpinner: document.getElementById('loadingSpinner'),
 };
 
-// ---------- State ----------
 const state = {
   ws: null,
   playerId: null,
@@ -51,39 +44,41 @@ const state = {
   credits: 1000,
 
   // three
-  renderer: null,
-  labelRenderer: null,
   scene: null,
   camera: null,
   controls: null,
-  clock: new THREE.Clock(),
+  renderer: null,
+  labelRenderer: null,
 
   // world
-  mazeWalls: [], // [{mesh,min,max}]
   ground: null,
+  mazeWalls: [],   // array of THREE.Mesh (colliders) + bounds
+  mazeRects: [],   // {x,z,w,h,minX,maxX,minZ,maxZ}
 
-  // player & entities
-  entities: new Map(), // id -> { node, tag, name, avatar, target }
+  // entities
+  entities: new Map(), // id -> { group, bodyMesh, labelObj, height, radius, name, avatar, target, isNPC }
   player: null,
 
-  // movement
+  // input
   keys: {},
-  AVATAR_SIZE: 1.0, // unit height basis
-  AVATAR_RADIUS: 0.4,
-  AVATAR_HEIGHT: 1.7,
+  turnSpeed: THREE.MathUtils.degToRad(120), // deg/s
+  moveSpeed: 6, // m/s (× sprint)
 
   // misc
+  avatarReady: true,
+  banned: false,
+
   weather: { type: 'clear', intensity: 1 },
   gameTime: 12.0,
 
-  stats: { reportsTotal: 0, reportsCorrect: 0 },
+  stats: { reportsTotal: 0, reportsCorrect: 0 }
 };
 
-const CHAT_DISTANCE = 5 * state.AVATAR_SIZE; // private chat only if within this
-
-// ---------- Utils ----------
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (m) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
+// ──────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────────────────────────────────────
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 function addLine(user, text, isPrivate = false, isSystem = false) {
   const div = document.createElement('div');
@@ -102,11 +97,38 @@ function updateCredits(amount, reason) {
 function updateStats() {
   ui.statReports.textContent = state.stats.reportsTotal;
   ui.statAccuracy.textContent = state.stats.reportsTotal > 0
-    ? `${((state.stats.reportsCorrect / state.stats.reportsTotal) * 100).toFixed(0)}%` : '--';
+    ? Math.round((state.stats.reportsCorrect / state.stats.reportsTotal) * 100) + '%'
+    : '--';
 }
-function clamp(v, min, max){ return Math.min(max, Math.max(min, v)); }
 
-// ---------- Weather & Time ----------
+// ──────────────────────────────────────────────────────────────────────────────
+// Moderatie (client-side pre-check vóór versturen)
+// ──────────────────────────────────────────────────────────────────────────────
+// NB: server-side blijft leidend voor echte ban/credits; dit is extra bescherming.
+// Eenvoudige heuristieken (bewust conservatief).
+const RE_EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
+const RE_PHONE = /\b(?:\+?\d{1,3}[\s-]?)?(?:\(?\d{2,4}\)?[\s-]?)?\d{3,4}[\s-]?\d{3,4}\b/;
+const RE_ADDRESS = /\b(?:straat|laan|weg|plein|dorp|dreef|gracht|kade|avenue|road|street|st\.|avenue|boulevard)\b/i;
+const RE_SEXUAL = /\b(porn|porno|sex|seks|horny|nsfw|nude|naakt|erotic)\b/i;
+const RE_CSAM = /\b(child\s*sex|kinderporno|kinder porn|child porn|cp\b|underage\s*sex|minor\s*sex|sex\s*with\s*children|pedofil|pedo)\b/i;
+
+function moderateLocal(text) {
+  const lower = text.toLowerCase();
+  if (RE_CSAM.test(lower)) {
+    return { block:true, ban:true, penalty: 0, message: 'Verboden inhoud (kindermisbruik). Je bent geblokkeerd.' };
+  }
+  if (RE_SEXUAL.test(lower)) {
+    return { block:true, ban:false, penalty: -500, message: 'Seksueel getinte inhoud is niet toegestaan (-500).' };
+  }
+  if (RE_EMAIL.test(text) || RE_PHONE.test(text) || RE_ADDRESS.test(lower)) {
+    return { block:true, ban:false, penalty: -50, message: 'Dat soort vragen/gegevens worden hier niet getolereerd (-50).' };
+  }
+  return { block:false };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Weer & Tijd
+// ──────────────────────────────────────────────────────────────────────────────
 function updateWeather(type, intensity) {
   state.weather = { type, intensity };
   const icons = { clear:'☀️', cloudy:'☁️', rain:'🌧️', fog:'🌫️' };
@@ -114,436 +136,350 @@ function updateWeather(type, intensity) {
 }
 function updateTimeOfDay(gameTime) {
   state.gameTime = gameTime;
-  const hour = Math.floor(gameTime);
-  const min = Math.floor((gameTime - hour) * 60);
-  ui.timeDisplay.textContent = `${hour.toString().padStart(2,'0')}:${min.toString().padStart(2,'0')}`;
+  const h = Math.floor(gameTime), m = Math.floor((gameTime - h) * 60);
+  ui.timeDisplay.textContent = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
 }
 
-// ---------- Three setup ----------
-const canvas = document.getElementById('renderCanvas'); // provided by index.html
+// ──────────────────────────────────────────────────────────────────────────────
+// Three.js Scene
+// ──────────────────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('renderCanvas');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-state.renderer = renderer;
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x0b1020, 1);
 
 const labelRenderer = new CSS2DRenderer();
-labelRenderer.setSize(window.innerWidth, window.innerHeight);
+labelRenderer.setSize(innerWidth, innerHeight);
 labelRenderer.domElement.style.position = 'fixed';
 labelRenderer.domElement.style.top = '0';
 labelRenderer.domElement.style.pointerEvents = 'none';
 document.body.appendChild(labelRenderer.domElement);
-state.labelRenderer = labelRenderer;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0c1324);
 state.scene = scene;
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 2000);
-camera.position.set(0, 8, 12);
+// Camera + controls
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 1000);
+camera.position.set(0, 14, 22);
 state.camera = camera;
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enablePan = false;
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-controls.minDistance = 6;
-controls.maxDistance = 60;
-controls.minPolarAngle = THREE.MathUtils.degToRad(15);
-controls.maxPolarAngle = THREE.MathUtils.degToRad(80);
+controls.minDistance = 8;
+controls.maxDistance = 50;
+controls.minPolarAngle = 0.12; // niet onder de grond
+controls.maxPolarAngle = Math.PI/2.05;
+controls.target.set(0, 2, 0);
 state.controls = controls;
 
-// Lights (simple)
+// Licht
 {
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x334466, 0.6);
+  const hemi = new THREE.HemisphereLight(0xb5eaff, 0x202428, 0.8);
   scene.add(hemi);
   const dir = new THREE.DirectionalLight(0xffffff, 0.9);
-  dir.position.set(30, 50, 20);
+  dir.position.set(20, 40, 20);
   dir.castShadow = true;
-  dir.shadow.mapSize.set(1024,1024);
+  dir.shadow.mapSize.set(2048,2048);
   scene.add(dir);
 }
 
-// ---------- World (maze) ----------
-const maze = {
-  // simple generated corridors
-  size: 500, // ground size
-  wallHeight: 1.4,
-  wallThickness: 2.5,
-  cell: 24, // grid cell size
-};
+// Ground
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x8797a3, metalness:0.0, roughness:0.95 });
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(120,120), groundMat);
+ground.rotation.x = -Math.PI/2;
+ground.receiveShadow = true;
+scene.add(ground);
+state.ground = ground;
 
-const mazeWalls = []; // {mesh,min,max}
-state.mazeWalls = mazeWalls;
+// Maze (platte muren/richels)
+buildMaze();
 
-function addWall(x, z, w, d) {
-  const h = maze.wallHeight;
-  const g = new THREE.BoxGeometry(w, h, d);
-  const m = new THREE.MeshStandardMaterial({ color: 0x889199, metalness: 0.0, roughness: 0.9 });
-  const mesh = new THREE.Mesh(g, m);
-  mesh.position.set(x, h/2, z);
-  mesh.receiveShadow = true;
-  mesh.castShadow = true;
-  mesh.userData.isMazeWall = true;
-  scene.add(mesh);
-  // pre-bake AABB
-  mesh.updateWorldMatrix(true, true);
-  const box = new THREE.Box3().setFromObject(mesh);
-  mazeWalls.push({ mesh, min: box.min.clone(), max: box.max.clone() });
-  return mesh;
+// ──────────────────────────────────────────────────────────────────────────────
+// Entity helpers (avatars)
+// ──────────────────────────────────────────────────────────────────────────────
+const AVATAR_HEIGHT = 1.2;
+const AVATAR_RADIUS = 0.45;
+
+function makeNametag(name, emoji) {
+  const el = document.createElement('div');
+  el.className = 'nametag';
+  el.textContent = (emoji ? `${emoji} ${name}` : name);
+  return new CSS2DObject(el);
 }
 
-function buildMaze() {
-  // ground
-  const g = new THREE.PlaneGeometry(maze.size, maze.size);
-  const m = new THREE.MeshStandardMaterial({ color: 0xdfe6ea, metalness:0, roughness:1 });
-  const ground = new THREE.Mesh(g, m);
-  ground.rotation.x = -Math.PI/2;
-  ground.receiveShadow = true;
-  scene.add(ground);
-  state.ground = ground;
-
-  // create border walls
-  const half = maze.size / 2;
-  addWall(0, -half + maze.wallThickness/2, maze.size, maze.wallThickness);
-  addWall(0,  half - maze.wallThickness/2, maze.size, maze.wallThickness);
-  addWall(-half + maze.wallThickness/2, 0, maze.wallThickness, maze.size);
-  addWall( half - maze.wallThickness/2, 0, maze.wallThickness, maze.size);
-
-  // procedural corridors: rectangular blocks
-  const rows = 9, cols = 9;
-  const gap = maze.cell;
-  const startX = -half + 80;
-  const startZ = -half + 80;
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      // random skip to create corridors
-      if ((r+c)%2===0) continue;
-      if (Math.random() < 0.35) continue;
-      const x = startX + c * gap * 2;
-      const z = startZ + r * gap * 2;
-      const w = gap * (1.2 + Math.random()*0.8);
-      const d = gap * (1.2 + Math.random()*0.8);
-      addWall(x, z, w, d);
-    }
-  }
-
-  // minimal city-like backplate (skyline silhouettes far away)
-  const skyline = new THREE.Group();
-  const skyMat = new THREE.MeshBasicMaterial({ color: 0x20263a, depthWrite:false });
-  for (let i=0;i<30;i++){
-    const w = 20 + Math.random()*60;
-    const h = 20 + Math.random()*90;
-    const d = 5 + Math.random()*10;
-    const mx = (Math.random()<0.5?-1:1) * (half + 40 + Math.random()*80);
-    const mz = -half + Math.random()*maze.size;
-    const box = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), skyMat);
-    box.position.set(mx, h/2, mz);
-    skyline.add(box);
-  }
-  skyline.renderOrder = -1;
-  scene.add(skyline);
-}
-
-// ---------- Avatar ----------
-function createAvatarMesh() {
-  // simple robot-ish avatar (no going through walls)
+function buildAvatar(name, emoji='🙂') {
   const group = new THREE.Group();
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x18e2a5, metalness:0.2, roughness:0.6 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x222, metalness:0.5, roughness:0.8 });
 
-  // body (capsule-like)
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.4, 0.8, 8, 16), bodyMat);
-  body.castShadow = true;
-  body.receiveShadow = true;
+  // Simple stylized bot (cilinder + hoofd)
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1be38d, metalness:0.2, roughness:0.6 });
+  const headMat = new THREE.MeshStandardMaterial({ color: 0x14b56f, metalness:0.3, roughness:0.5 });
+
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(AVATAR_RADIUS, AVATAR_HEIGHT-AVATAR_RADIUS*2, 8, 16), bodyMat);
+  body.castShadow = true; body.receiveShadow = true;
   group.add(body);
 
-  // head
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.32, 24, 16), dark);
-  head.position.y = 0.95;
-  head.castShadow = true;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.34, 16, 16), headMat);
+  head.position.y = AVATAR_HEIGHT*0.55 + 0.25;
+  head.castShadow = true; head.receiveShadow = true;
   group.add(head);
 
-  // visor
-  const visor = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.18, 0.05), new THREE.MeshStandardMaterial({color:0x111111, emissive:0x222222}));
-  visor.position.set(0, 0.95, 0.31);
-  group.add(visor);
+  // label
+  const label = makeNametag(name, emoji);
+  label.position.set(0, AVATAR_HEIGHT*0.55 + 0.62, 0);
+  group.add(label);
 
-  // legs
-  const legMat = new THREE.MeshStandardMaterial({ color: 0x996633, metalness:0, roughness:0.9 });
-  const legL = new THREE.Mesh(new THREE.CylinderGeometry(0.08,0.09,0.60, 12), legMat);
-  legL.position.set(-0.18, -0.5, 0);
-  const legR = legL.clone();
-  legR.position.x = 0.18;
-  group.add(legL, legR);
+  // voor raycast hitbox
+  const hit = new THREE.Mesh(new THREE.CylinderGeometry(AVATAR_RADIUS*0.9, AVATAR_RADIUS*0.9, AVATAR_HEIGHT, 6), new THREE.MeshBasicMaterial({color:0x000000, transparent:true, opacity:0}));
+  hit.position.y = AVATAR_HEIGHT*0.55;
+  hit.userData.isHit = true;
+  group.add(hit);
 
-  // scale to avatar size
-  group.scale.setScalar(state.AVATAR_SIZE);
-  return group;
+  return { group, bodyMesh: body, labelObj: label, height: AVATAR_HEIGHT, radius: AVATAR_RADIUS };
 }
 
-function makeNameTag(displayName) {
-  const div = document.createElement('div');
-  div.className = 'nametag';
-  div.textContent = displayName;
-  const obj = new CSS2DObject(div);
-  obj.position.set(0, 1.9, 0);
-  return obj;
+function addEntity(id, x, z, name, emoji, isNPC=false) {
+  if (state.entities.has(id)) return state.entities.get(id);
+
+  const av = buildAvatar(name || id, emoji || '🙂');
+  av.group.position.set(x || 0, 0, z || 0);
+  scene.add(av.group);
+
+  const ent = {
+    ...av,
+    id, name: name || id, avatar: emoji || '🙂',
+    isNPC,
+    target: new THREE.Vector3(x||0, 0, z||0),
+  };
+  state.entities.set(id, ent);
+  return ent;
 }
 
-function addEntity(id, x, z, name, emoji) {
-  if (state.entities.has(id)) return;
-
-  const node = createAvatarMesh();
-  node.position.set(x||0, 0, z||0);
-  scene.add(node);
-
-  const tag = makeNameTag((emoji? (emoji+' '):'') + (name||id));
-  node.add(tag);
-
-  state.entities.set(id, {
-    node, tag,
-    name: name || id,
-    avatar: emoji || '🙂',
-    target: node.position.clone(),
-  });
-}
 function removeEntity(id) {
   const e = state.entities.get(id);
   if (!e) return;
-  if (e.tag) e.tag.element?.remove();
-  e.node?.removeFromParent();
+  scene.remove(e.group);
+  e.group.traverse(o=>{ if (o.geometry) o.geometry.dispose(); if (o.material) Array.isArray(o.material)?o.material.forEach(m=>m.dispose()):o.material.dispose(); });
   state.entities.delete(id);
 }
 
-// ---------- Movement & Collision ----------
-function resolveCollisions(currentPos, desiredPos) {
-  const pos = desiredPos.clone();
-  for (const w of mazeWalls) {
-    const min = new THREE.Vector3(w.min.x - state.AVATAR_RADIUS, w.min.y - 0.2, w.min.z - state.AVATAR_RADIUS);
-    const max = new THREE.Vector3(w.max.x + state.AVATAR_RADIUS, w.max.y + state.AVATAR_HEIGHT, w.max.z + state.AVATAR_RADIUS);
+// ──────────────────────────────────────────────────────────────────────────────
+// Maze opbouw + collision rects
+// ──────────────────────────────────────────────────────────────────────────────
+function buildMaze() {
+  // eenvoudige “grid-based” layout: 12x12
+  const rng = (seed => () => (seed = (seed * 9301 + 49297) % 233280) / 233280)(12345);
+  const cols = 12, rows = 12;
+  const cell = 8; // meter
+  const wallThick = 1.2;
+  const height = 1.4;
+  const startX = - (cols*cell)/2;
+  const startZ = - (rows*cell)/2;
 
-    if (pos.x >= min.x && pos.x <= max.x &&
-        currentPos.y >= min.y && currentPos.y <= max.y &&
-        pos.z >= min.z && pos.z <= max.z) {
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0x6b7a86, metalness:0.0, roughness:0.9 });
 
-      const dx = Math.min(max.x - pos.x, pos.x - min.x);
-      const dz = Math.min(max.z - pos.z, pos.z - min.z);
+  function addWall(x, z, w, h) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, height, h), wallMat);
+    mesh.position.set(x, height/2, z);
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    scene.add(mesh);
+    state.mazeWalls.push(mesh);
+    const rect = { x, z, w, h, minX:x - w/2, maxX:x + w/2, minZ:z - h/2, maxZ:z + h/2 };
+    state.mazeRects.push(rect);
+  }
 
-      if (dx < dz) {
-        if ((pos.x - min.x) < (max.x - pos.x)) pos.x = min.x;
-        else pos.x = max.x;
-      } else {
-        if ((pos.z - min.z) < (max.z - pos.z)) pos.z = min.z;
-        else pos.z = max.z;
+  // frame
+  addWall(0, startZ, cols*cell, wallThick);
+  addWall(0, -startZ, cols*cell, wallThick);
+  addWall(startX, 0, wallThick, rows*cell);
+  addWall(-startX, 0, wallThick, rows*cell);
+
+  // binnenste gangen (random)
+  for (let r = 1; r < rows-1; r++) {
+    for (let c = 1; c < cols-1; c++) {
+      // horizontale segmenten
+      if (rng() < 0.5) {
+        const cx = startX + c*cell;
+        const cz = startZ + r*cell;
+        addWall(cx, cz, cell * (0.65 + rng()*0.2), wallThick);
+      }
+      // verticale segmenten
+      if (rng() < 0.5) {
+        const cx = startX + c*cell;
+        const cz = startZ + r*cell;
+        addWall(cx, cz, wallThick, cell * (0.65 + rng()*0.2));
       }
     }
   }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+function clampCameraTarget() {
+  // houd target (vloer) positief
+  state.controls.target.y = Math.max(state.controls.target.y, 0.5);
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Movement + Collision
+// ──────────────────────────────────────────────────────────────────────────────
+function collidePosition(pos, radius) {
+  // per-as correctie tegen axis-aligned rects
+  let px = pos.x, pz = pos.z;
+
+  // X as
+  for (const r of state.mazeRects) {
+    if (pz + radius < r.minZ || pz - radius > r.maxZ) continue; // geen overlap in Z
+    const nearestX = THREE.MathUtils.clamp(px, r.minX, r.maxX);
+    const dx = px - nearestX;
+    if (Math.abs(dx) < radius) {
+      const push = (radius - Math.abs(dx)) * Math.sign(dx || 1);
+      px = px + push;
+    }
+  }
+  // Z as
+  for (const r of state.mazeRects) {
+    if (px + radius < r.minX || px - radius > r.maxX) continue; // geen overlap in X
+    const nearestZ = THREE.MathUtils.clamp(pz, r.minZ, r.maxZ);
+    const dz = pz - nearestZ;
+    if (Math.abs(dz) < radius) {
+      const push = (radius - Math.abs(dz)) * Math.sign(dz || 1);
+      pz = pz + push;
+    }
+  }
+
+  pos.x = px; pos.z = pz;
   return pos;
 }
 
 function tickMovement(dt) {
-  if (!state.player) return;
-  const me = state.player;
+  if (!state.player || state.banned) return;
 
-  // camera-forward on XZ
-  const camDir = new THREE.Vector3();
-  camera.getWorldDirection(camDir);
-  camDir.y = 0; camDir.normalize();
-  const right = new THREE.Vector3(camDir.z, 0, -camDir.x).normalize();
+  const turn = state.turnSpeed * dt;
+  const speed = (state.keys['shift'] ? 1.7 : 1.0) * state.moveSpeed;
+  const forward = speed * dt;
 
-  const speed = 4.0;
-  let move = new THREE.Vector3();
+  // Rotatie (A/D)
+  if (state.keys['a']) state.player.group.rotation.y += turn;
+  if (state.keys['d']) state.player.group.rotation.y -= turn;
 
-  // A=left, D=right, W=forward, S=back
-  if (state.keys['a']) move.add(right.clone().multiplyScalar(-1));
-  if (state.keys['d']) move.add(right);
-  if (state.keys['w']) move.add(camDir);
-  if (state.keys['s']) move.add(camDir.clone().multiplyScalar(-1));
+  // Vooruit/Achteruit (W/S)
+  const dir = new THREE.Vector3(0,0,-1).applyEuler(state.player.group.rotation).setY(0).normalize();
+  let moved = false;
+  let newPos = state.player.group.position.clone();
 
-  if (move.lengthSq() === 0) return;
-  move.normalize().multiplyScalar(speed * dt);
+  if (state.keys['w']) { newPos.addScaledVector(dir, forward); moved = true; }
+  if (state.keys['s']) { newPos.addScaledVector(dir, -forward); moved = true; }
 
-  const desired = me.node.position.clone().add(move);
-  const resolved = resolveCollisions(me.node.position, desired);
+  if (moved) {
+    collidePosition(newPos, state.player.radius);
+    state.player.group.position.copy(newPos);
 
-  // clamp world bounds
-  const bound = (maze.size/2) - 5;
-  resolved.x = clamp(resolved.x, -bound, bound);
-  resolved.z = clamp(resolved.z, -bound, bound);
+    // camera volgt
+    const tgt = new THREE.Vector3(newPos.x, 2, newPos.z);
+    state.controls.target.lerp(tgt, 0.15);
+    clampCameraTarget();
 
-  me.node.position.copy(resolved);
-
-  // look towards movement direction (smooth)
-  const look = me.node.position.clone().add(move);
-  me.node.lookAt(look.x, me.node.position.y, look.z);
-
-  // camera follow target
-  const target = new THREE.Vector3(resolved.x, 1.6, resolved.z);
-  controls.target.lerp(target, 0.1);
-
-  // send position throttled
-  const now = performance.now();
-  if (!tickMovement.last || now - tickMovement.last > 90) {
-    tickMovement.last = now;
-    if (state.ws?.readyState === WebSocket.OPEN) {
-      state.ws.send(JSON.stringify({ type:'move', x: resolved.x, z: resolved.z }));
+    // throttle send
+    const now = performance.now();
+    if (!tickMovement.last || now - tickMovement.last > 90) {
+      tickMovement.last = now;
+      if (state.ws?.readyState === WebSocket.OPEN) {
+        state.ws.send(JSON.stringify({ type:'move', x:newPos.x, z:newPos.z }));
+      }
     }
   }
 }
 
 function interpolateRemotes() {
+  const tmp = new THREE.Vector3();
   state.entities.forEach((e, id) => {
     if (id === state.playerId) return;
     if (!e.target) return;
-    e.node.position.lerp(e.target, 0.15);
+    tmp.copy(e.group.position).lerp(e.target, 0.18);
+    collidePosition(tmp, e.radius);
+    e.group.position.copy(tmp);
   });
 }
 
-// ---------- Minimap ----------
+// ──────────────────────────────────────────────────────────────────────────────
+// Minimap
+// ──────────────────────────────────────────────────────────────────────────────
 function updateMinimap() {
-  const c = ui.minimapCanvas;
-  const ctx = c.getContext('2d');
-  c.width = 220; c.height = 220;
+  const cvs = ui.minimapCanvas;
+  const ctx = cvs.getContext('2d');
+  cvs.width = cvs.clientWidth; cvs.height = cvs.clientHeight;
 
-  // bg
   ctx.fillStyle = 'rgba(10,15,24,0.95)';
-  ctx.fillRect(0,0,c.width,c.height);
+  ctx.fillRect(0,0,cvs.width,cvs.height);
 
   // grid
-  ctx.strokeStyle = '#1a2d3a';
-  ctx.lineWidth = 1;
-  for (let i=0;i<=11;i++){
-    const p = (i*(c.width/11))|0;
-    ctx.beginPath(); ctx.moveTo(p,0); ctx.lineTo(p,c.height); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0,p); ctx.lineTo(c.width,p); ctx.stroke();
+  ctx.strokeStyle = '#1a2d3a'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 10; i++) {
+    const p = i * cvs.width/10;
+    ctx.beginPath(); ctx.moveTo(p,0); ctx.lineTo(p,cvs.height); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0,p); ctx.lineTo(cvs.width,p); ctx.stroke();
   }
 
-  const half = maze.size/2;
-  function mapXZ(x,z){
-    const nx = (x + half) / maze.size;
-    const nz = (z + half) / maze.size;
-    return [ nx * c.width, nz * c.height ];
-  }
+  // world → minimap: -60..+60 → 0..w
+  function mapX(x){ return (x + 60) / 120 * cvs.width; }
+  function mapZ(z){ return (z + 60) / 120 * cvs.height; }
 
-  state.entities.forEach((ent, id)=>{
-    const [x,z] = mapXZ(ent.node.position.x, ent.node.position.z);
-    const isMe = (id === state.playerId);
-    ctx.fillStyle = isMe ? '#00ff88' : '#9aa';
-    ctx.beginPath();
-    ctx.arc(x, z, isMe ? 4 : 3, 0, Math.PI*2);
-    ctx.fill();
-    if (isMe) {
-      ctx.strokeStyle = '#00ff88';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(x,z,8,0,Math.PI*2); ctx.stroke();
-    }
+  // walls
+  ctx.strokeStyle = '#3c5664';
+  state.mazeRects.forEach(r=>{
+    ctx.strokeRect(mapX(r.minX), mapZ(r.minZ), mapX(r.maxX)-mapX(r.minX), mapZ(r.maxZ)-mapZ(r.minZ));
+  });
+
+  // entities
+  state.entities.forEach((ent, id) => {
+    const x = mapX(ent.group.position.x);
+    const z = mapZ(ent.group.position.z);
+    ctx.fillStyle = (id === state.playerId) ? '#00ff88' : (ent.isNPC ? '#8aa' : '#9af');
+    ctx.beginPath(); ctx.arc(x, z, (id===state.playerId? 5:3), 0, Math.PI*2); ctx.fill();
   });
 }
 
-// ---------- Context Menu ----------
-function setupContextMenu() {
-  const menu = ui.rightMenu;
+// ──────────────────────────────────────────────────────────────────────────────
+// Input & UI
+// ──────────────────────────────────────────────────────────────────────────────
+window.addEventListener('keydown', e => { state.keys[e.key.toLowerCase()] = true; });
+window.addEventListener('keyup',   e => { state.keys[e.key.toLowerCase()] = false; });
 
-  window.addEventListener('contextmenu', (ev) => {
-    ev.preventDefault();
+ui.sendBtn.onclick = onSend;
+ui.msg.addEventListener('keydown', e => { if (e.key === 'Enter') onSend(); });
 
-    // pick nearest entity by projecting screen space & distance
-    // simpler: loop entities and compute screen distance
-    let pickedId = null;
-    let best = 28; // px tolerance
-    const rect = renderer.domElement.getBoundingClientRect();
+function onSend(){
+  if (state.banned) return;
+  let text = ui.msg.value.trim();
+  if (!text) return;
 
-    state.entities.forEach((ent, id) => {
-      const v = ent.node.position.clone();
-      v.y += 1.2;
-      v.project(camera);
-      const sx = (v.x * 0.5 + 0.5) * rect.width;
-      const sy = ( -v.y * 0.5 + 0.5) * rect.height;
-      const d = Math.hypot(sx - ev.clientX + rect.left, sy - ev.clientY + rect.top);
-      if (d < best) { best = d; pickedId = id; }
-    });
-
-    menu.style.left = `${ev.clientX}px`;
-    menu.style.top  = `${ev.clientY}px`;
-    menu.style.display = 'block';
-
-    const setPublic = () => {
-      state.targetId = null;
-      ui.targetName.textContent = 'Openbaar';
-      menu.style.display = 'none';
-    };
-
-    ui.mClear.textContent = '🔓 Publieke chat';
-    ui.mClear.onclick = setPublic;
-
-    if (pickedId && pickedId !== state.playerId) {
-      const ent = state.entities.get(pickedId);
-      ui.mChat.textContent = `💬 Chat met ${ent?.name || 'onbekend'}`;
-      ui.mReport.textContent = `⚠️ Rapporteer ${ent?.name || 'onbekend'}`;
-
-      ui.mChat.onclick = () => {
-        // distance gate
-        const me = state.player?.node?.position;
-        const other = ent?.node?.position;
-        if (me && other) {
-          const dist = me.distanceTo(other);
-          if (dist > CHAT_DISTANCE) {
-            addLine('SYSTEM:', `Je staat te ver weg om privé te praten (afstand ${dist.toFixed(1)}m; max ${CHAT_DISTANCE.toFixed(1)}m).`, false, true);
-            menu.style.display = 'none';
-            return;
-          }
-        }
-        state.targetId = pickedId;
-        ui.targetName.textContent = ent?.name || 'Openbaar';
-        menu.style.display = 'none';
-      };
-      ui.mReport.onclick = () => {
-        if (state.ws?.readyState === WebSocket.OPEN) {
-          state.ws.send(JSON.stringify({ type:'report', reportedId: pickedId }));
-        }
-        menu.style.display = 'none';
-      };
-    } else {
-      ui.mChat.textContent = '—';
-      ui.mReport.textContent = '—';
-      ui.mChat.onclick = () => menu.style.display = 'none';
-      ui.mReport.onclick = () => menu.style.display = 'none';
+  // lokale pre-moderatie
+  const verdict = moderateLocal(text);
+  if (verdict.block) {
+    if (verdict.penalty) updateCredits(verdict.penalty, verdict.message);
+    addLine('SYSTEM:', verdict.message, false, true);
+    ui.msg.value = '';
+    if (verdict.ban) {
+      // local “ban”
+      state.banned = true;
+      ui.conn.textContent = '● Geblokkeerd';
+      ui.conn.style.color = '#ff4444';
+      if (state.ws) try{ state.ws.close(); }catch{}
+      ui.sendBtn.disabled = true; ui.msg.disabled = true;
     }
-
-    setTimeout(()=> window.addEventListener('click', ()=> menu.style.display='none', {once:true}), 80);
-  });
-}
-
-// ---------- Chat ----------
-function sendMessage(text) {
-  if (!text || !text.trim()) return;
-  const payload = { type:'chat', message: text.trim() };
-
-  // distance gate if private
-  if (state.targetId && state.entities.has(state.targetId) && state.player) {
-    const me = state.player.node.position;
-    const other = state.entities.get(state.targetId).node.position;
-    const dist = me.distanceTo(other);
-    if (dist > CHAT_DISTANCE) {
-      addLine('SYSTEM:', `Je staat te ver weg van ${state.entities.get(state.targetId).name} om privé te praten (${dist.toFixed(1)}m).`, false, true);
-      return;
-    }
-    payload.targetId = state.targetId;
+    return;
   }
+
+  const payload = { type:'chat', message:text };
+  if (state.targetId) payload.targetId = state.targetId;
 
   if (state.ws?.readyState === WebSocket.OPEN) {
     state.ws.send(JSON.stringify(payload));
   }
+  ui.msg.value = '';
 }
 
-// ---------- Input & UI ----------
-function setupUI() {
-  // chat box
-  ui.sendBtn.onclick = () => { const t = ui.msg.value.trim(); if (!t) return; sendMessage(t); ui.msg.value = ''; };
-  ui.msg.addEventListener('keydown', (e) => { if (e.key === 'Enter') ui.sendBtn.click(); });
-
-  // avatar grid
+function setupOverlay() {
   const avatarList = ['🙂','😀','🙃','😎','🧑','👩','👨','🧔','👱‍♀️','👱‍♂️','🧕','👳'];
   avatarList.forEach(emoji => {
     const d = document.createElement('div');
@@ -558,8 +494,6 @@ function setupUI() {
     ui.avatars.appendChild(d);
   });
   ui.nameInput.oninput = () => { ui.startBtn.disabled = !ui.nameInput.value.trim(); };
-
-  // start
   ui.startBtn.addEventListener('click', () => {
     state.username = ui.nameInput.value.trim();
     state.playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -567,30 +501,70 @@ function setupUI() {
     ui.loadingSpinner.style.display = 'block';
     connectWS();
   });
-
-  // key input
-  window.addEventListener('keydown', (e) => {
-    const k = e.key.toLowerCase();
-    state.keys[k] = true;
-    // prevent scrolling with arrows/space
-    if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(k)) e.preventDefault();
-  });
-  window.addEventListener('keyup', (e) => { state.keys[e.key.toLowerCase()] = false; });
-
-  setupContextMenu();
 }
+setupOverlay();
 
-function updateHUDConnection(statusText, color='#9fffdc') {
-  ui.conn.textContent = statusText;
-  ui.conn.style.color = color;
-}
+// Klik-popup (links-klik)
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+canvas.addEventListener('click', (ev)=>{
+  if (!state.scene) return;
+  const rect = canvas.getBoundingClientRect();
+  mouse.x = ((ev.clientX - rect.left)/rect.width)*2 - 1;
+  mouse.y = -((ev.clientY - rect.top)/rect.height)*2 + 1;
+  raycaster.setFromCamera(mouse, camera);
 
-// ---------- WebSocket ----------
+  const hits = raycaster.intersectObjects(Array.from(state.entities.values()).map(e => e.group), true)
+    .filter(h => h.object?.userData?.isHit);
+  const menu = ui.rightMenu;
+
+  if (hits.length) {
+    const e = Array.from(state.entities.values()).find(ent => hits[0].object.parent === ent.group || hits[0].object === ent.group || ent.group.children.includes(hits[0].object));
+    if (!e) return;
+
+    state.targetId = e.id;
+    ui.targetName.textContent = e.name;
+
+    menu.style.left = ev.clientX + 'px';
+    menu.style.top  = ev.clientY + 'px';
+    menu.style.display = 'block';
+
+    ui.mChat.onclick = () => {
+      // afstandscheck 5× avatarhoogte
+      const dist = state.player ? state.player.group.position.distanceTo(e.group.position) : Infinity;
+      const maxDist = e.height * 5;
+      if (dist > maxDist) {
+        addLine('SYSTEM:', `Je staat te ver weg om privé te praten (>${Math.round(maxDist)}m).`, false, true);
+      } else {
+        addLine('SYSTEM:', `Privé chat met ${e.name} actief.`, false, true);
+      }
+      menu.style.display = 'none';
+    };
+    ui.mReport.onclick = () => {
+      if (state.ws?.readyState === WebSocket.OPEN) {
+        state.ws.send(JSON.stringify({ type:'report', reportedId: e.id }));
+      }
+      menu.style.display = 'none';
+    };
+
+    setTimeout(()=>window.addEventListener('click', ()=> menu.style.display='none', {once:true}), 50);
+  } else {
+    menu.style.display = 'none';
+    state.targetId = null;
+    ui.targetName.textContent = 'Openbaar';
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// WebSocket
+// ──────────────────────────────────────────────────────────────────────────────
 function connectWS() {
   state.ws = new WebSocket(WS_URL);
 
   state.ws.addEventListener('open', () => {
-    updateHUDConnection('● Connected', '#00ff88');
+    ui.conn.textContent = '● Connected';
+    ui.conn.style.color = '#00ff88';
+
     state.ws.send(JSON.stringify({
       type:'join',
       playerId: state.playerId,
@@ -598,46 +572,49 @@ function connectWS() {
       avatar: state.avatarEmoji,
       x: 0, z: 0
     }));
+
     addLine('SYSTEM:', 'Verbonden met server. Wereld laden...', false, true);
   });
 
   state.ws.addEventListener('message', (e) => {
-    let data; try { data = JSON.parse(e.data); } catch { return; }
+    let data;
+    try { data = JSON.parse(e.data); } catch { return; }
 
-    switch(data.type) {
+    switch (data.type) {
       case 'init': {
-        // world already built; create entities
-        data.players.forEach(p => addEntity(p.id, p.x, p.z, p.username, p.avatar));
-        data.npcs.forEach(n => addEntity(n.id, n.x, n.z, n.name, '🤖'));
+        // Maak bestaande entiteiten
+        data.players.forEach(p => addEntity(p.id, p.x, p.z, p.username, p.avatar, false));
+        data.npcs.forEach(n => addEntity(n.id, n.x, n.z, n.name, '🤖', true));
 
-        // ensure self exists
-        if (!state.entities.has(state.playerId)) addEntity(state.playerId, 0,0, state.username, state.avatarEmoji);
-        state.player = state.entities.get(state.playerId);
+        state.player = addEntity(state.playerId, 0, 0, state.username, state.avatarEmoji, false);
+        controls.target.copy(state.player.group.position).y = 2;
 
-        // weather & time
+        // weer/tijd
         if (data.weather) {
           updateWeather(data.weather.type, data.weather.intensity);
           updateTimeOfDay(data.weather.gameTime);
         }
 
-        // focus camera
-        controls.target.copy(state.player.node.position);
+        // teller = spelers + npcs
+        ui.statPlayers.textContent = (data.players.length + data.npcs.length).toString();
 
-        // hide spinner
         ui.loadingSpinner.style.display = 'none';
         break;
       }
 
       case 'player_joined': {
-        const p = data.player;
-        if (p.id !== state.playerId) addEntity(p.id, p.x, p.z, p.username, p.avatar);
-        addLine('SYSTEM:', `${p.username} heeft zich aangesloten`, false, true);
+        if (data.player.id === state.playerId) break;
+        addEntity(data.player.id, data.player.x, data.player.z, data.player.username, data.player.avatar, false);
+        ui.statPlayers.textContent = String(parseInt(ui.statPlayers.textContent,10)+1);
+        addLine('SYSTEM:', `${data.player.username} heeft zich aangesloten`, false, true);
         break;
       }
 
-      case 'player_left':
+      case 'player_left': {
         removeEntity(data.playerId);
+        ui.statPlayers.textContent = String(Math.max(0, parseInt(ui.statPlayers.textContent,10)-1));
         break;
+      }
 
       case 'player_move': {
         const ent = state.entities.get(data.playerId);
@@ -645,18 +622,19 @@ function connectWS() {
         break;
       }
 
-      case 'npc_update':
-        data.npcs.forEach(n => {
-          const e = state.entities.get(n.id);
-          if (e) e.target = new THREE.Vector3(n.x, 0, n.z);
+      case 'npc_update': {
+        data.npcs.forEach(npc => {
+          const ent = state.entities.get(npc.id);
+          if (ent) ent.target = new THREE.Vector3(npc.x, 0, npc.z);
         });
         break;
+      }
 
       case 'chat': {
-        const isPrivate = !!data.private;
+        const isPrivate = data.private || false;
         const sender = data.username;
         const msg = data.message;
-        addLine(isPrivate ? `${sender} (privé):` : `${sender}:`, msg, isPrivate, false);
+        addLine(isPrivate ? `${sender} (privé):` : `${sender}:`, msg, isPrivate);
         break;
       }
 
@@ -666,8 +644,12 @@ function connectWS() {
 
       case 'report_result':
         state.stats.reportsTotal++;
-        if (data.correct) { state.stats.reportsCorrect++; updateCredits(50, `Correct! ${data.reportedName} is een echte speler`); }
-        else { updateCredits(-30, `Onjuist rapport over ${data.reportedName}`); }
+        if (data.correct) {
+          state.stats.reportsCorrect++;
+          updateCredits(50, `Correct! ${data.reportedName} is een echte speler`);
+        } else {
+          updateCredits(-30, `Onjuist rapport over ${data.reportedName}`);
+        }
         updateStats();
         break;
 
@@ -684,51 +666,50 @@ function connectWS() {
         break;
 
       case 'position_correction':
-        // server anti-cheat
         if (state.player) {
-          state.player.node.position.x = data.x;
-          state.player.node.position.z = data.z;
+          state.player.group.position.x = data.x;
+          state.player.group.position.z = data.z;
         }
         break;
     }
   });
 
   state.ws.addEventListener('close', () => {
-    updateHUDConnection('● Reconnecting...', '#ff8800');
+    if (state.banned) return; // zelf afgesloten door ban
+    ui.conn.textContent = '● Reconnecting...';
+    ui.conn.style.color = '#ff8800';
     addLine('SYSTEM:', 'Verbinding verbroken. Opnieuw verbinden...', false, true);
-    setTimeout(connectWS, 2000);
+    setTimeout(connectWS, 1500);
   });
-  state.ws.addEventListener('error', (err) => console.error('[WS error]', err));
+
+  state.ws.addEventListener('error', (err) => {
+    console.error('[WS] Error', err);
+  });
 }
 
-// ---------- Render loop ----------
-function animate() {
-  requestAnimationFrame(animate);
-  const dt = Math.min(0.05, state.clock.getDelta());
+// ──────────────────────────────────────────────────────────────────────────────
+// Renderloop
+// ──────────────────────────────────────────────────────────────────────────────
+let last = performance.now();
+function loop() {
+  const now = performance.now();
+  const dt = Math.min(0.05, (now - last)/1000);
+  last = now;
 
   tickMovement(dt);
   interpolateRemotes();
   updateMinimap();
+  clampCameraTarget();
 
-  controls.update();
   renderer.render(scene, camera);
   labelRenderer.render(scene, camera);
+  requestAnimationFrame(loop);
 }
+loop();
 
-// ---------- Boot ----------
-function boot() {
-  buildMaze();
-  setupUI();
-
-  window.addEventListener('resize', () => {
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    labelRenderer.setSize(window.innerWidth, window.innerHeight);
-  });
-
-  animate();
-  console.log('[Client] Ready');
-}
-
-boot();
+window.addEventListener('resize', ()=>{
+  const w = innerWidth, h = innerHeight;
+  camera.aspect = w/h; camera.updateProjectionMatrix();
+  renderer.setSize(w,h);
+  labelRenderer.setSize(w,h);
+});
