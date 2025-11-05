@@ -1,13 +1,20 @@
-// public/app.js — Three.js client: flat maze city, skyline, humanoid avatars (animated),
-// collisions, WASD movement (no wall clipping), private chat/report, weather, minimap, stats.
+// public/app.js
+// Three.js client for Social Credit — Amsterdam (Enhanced)
+// - Flat maze world (no ugly boxes), city-like background
+// - Third-person camera, A/D left-right, W forward, S backward
+// - Avatar collision with maze walls (AABB) + sliding
+// - Name tags via CSS2DRenderer
+// - Context menu for public/private chat + report
+// - Private chat only if within 5x avatar size distance
+// - Minimap, HUD, WS networking, NPC updates, weather/time, scoring
 
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { GLTFLoader }   from 'three/addons/loaders/GLTFLoader.js';
+import * as THREE from 'https://unpkg.com/three@0.159.0/build/three.module.js';
+import { OrbitControls } from 'https://unpkg.com/three@0.159.0/examples/jsm/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'https://unpkg.com/three@0.159.0/examples/jsm/renderers/CSS2DRenderer.js';
 
 const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
 
-// ---------- UI refs ----------
+// ---------- UI ----------
 const ui = {
   overlay: document.getElementById('overlay'),
   startBtn: document.getElementById('start'),
@@ -29,8 +36,8 @@ const ui = {
   minimapCanvas: document.getElementById('minimapCanvas'),
   statReports: document.getElementById('statReports'),
   statAccuracy: document.getElementById('statAccuracy'),
-  statPlayers: document.getElementById('statPlayers'),
-  loadingSpinner: document.getElementById('loadingSpinner'),
+  // intentionally NOT filling statPlayers to keep number of real players hidden
+  loadingSpinner: document.getElementById('loadingSpinner')
 };
 
 // ---------- State ----------
@@ -43,643 +50,685 @@ const state = {
   targetId: null,
   credits: 1000,
 
+  // three
   renderer: null,
+  labelRenderer: null,
   scene: null,
   camera: null,
   controls: null,
   clock: new THREE.Clock(),
 
-  mixers: new Map(),           // id -> AnimationMixer
-  entities: new Map(),         // id -> {node, name, avatar, target, speed}
+  // world
+  mazeWalls: [], // [{mesh,min,max}]
+  ground: null,
+
+  // player & entities
+  entities: new Map(), // id -> { node, tag, name, avatar, target }
   player: null,
 
-  avatarReady: false,
-  avatarTemplate: null,        // GLTF scene to clone
-  avatarClips: [],             // [idleClip, walkClip?]
-  pendingSpawns: [],
+  // movement
+  keys: {},
+  AVATAR_SIZE: 1.0, // unit height basis
+  AVATAR_RADIUS: 0.4,
+  AVATAR_HEIGHT: 1.7,
 
+  // misc
   weather: { type: 'clear', intensity: 1 },
   gameTime: 12.0,
 
   stats: { reportsTotal: 0, reportsCorrect: 0 },
-
-  // Maze collision
-  maze: {
-    cellSize: 8,
-    width: 30,   // cells
-    height: 30,  // cells
-    walls: [],   // array of {minX,maxX,minZ,maxZ}
-    bounds: { minX: -120, maxX: 120, minZ: -120, maxZ: 120 }
-  }
 };
 
+const CHAT_DISTANCE = 5 * state.AVATAR_SIZE; // private chat only if within this
+
 // ---------- Utils ----------
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
-function addLine(user, text, isPrivate=false, isSystem=false){
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (m) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
+}
+function addLine(user, text, isPrivate = false, isSystem = false) {
   const div = document.createElement('div');
-  div.className = 'line' + (isPrivate?' private':'') + (isSystem?' system':'');
+  div.className = 'line' + (isPrivate ? ' private' : '') + (isSystem ? ' system' : '');
   div.innerHTML = `<span class="user">${escapeHtml(user)}</span> ${escapeHtml(text)}`;
-  ui.chatlog.appendChild(div); ui.chatlog.scrollTop = ui.chatlog.scrollHeight;
+  ui.chatlog.appendChild(div);
+  ui.chatlog.scrollTop = ui.chatlog.scrollHeight;
   while (ui.chatlog.children.length > 200) ui.chatlog.removeChild(ui.chatlog.firstChild);
 }
-function sendMessage(text){
-  if (!text || !text.trim()) return;
-  const payload = { type:'chat', message: text.trim() };
-  if (state.targetId) payload.targetId = state.targetId;
-  if (state.ws?.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify(payload));
-}
-function updateCredits(amount, reason){
+function updateCredits(amount, reason) {
   state.credits += amount;
   ui.credit.textContent = state.credits;
   ui.credit.style.color = state.credits < 500 ? '#ff4444' : '#00ff88';
   if (reason) addLine('SYSTEM:', reason, false, true);
 }
-function updateStats(){
+function updateStats() {
   ui.statReports.textContent = state.stats.reportsTotal;
   ui.statAccuracy.textContent = state.stats.reportsTotal > 0
-    ? ((state.stats.reportsCorrect / state.stats.reportsTotal) * 100).toFixed(0) + '%'
-    : '--';
+    ? `${((state.stats.reportsCorrect / state.stats.reportsTotal) * 100).toFixed(0)}%` : '--';
 }
+function clamp(v, min, max){ return Math.min(max, Math.max(min, v)); }
 
-// ---------- Weather / Time ----------
-function updateWeather(type, intensity){
+// ---------- Weather & Time ----------
+function updateWeather(type, intensity) {
   state.weather = { type, intensity };
   const icons = { clear:'☀️', cloudy:'☁️', rain:'🌧️', fog:'🌫️' };
   ui.weatherIcon.textContent = icons[type] || '☀️';
 }
-function updateTimeOfDay(gameTime){
+function updateTimeOfDay(gameTime) {
   state.gameTime = gameTime;
-  const hour = Math.floor(gameTime), min = Math.floor((gameTime - hour) * 60);
+  const hour = Math.floor(gameTime);
+  const min = Math.floor((gameTime - hour) * 60);
   ui.timeDisplay.textContent = `${hour.toString().padStart(2,'0')}:${min.toString().padStart(2,'0')}`;
 }
 
 // ---------- Three setup ----------
-const canvas = document.getElementById('renderCanvas');
+const canvas = document.getElementById('renderCanvas'); // provided by index.html
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+state.renderer = renderer;
 
-async function createScene(){
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  state.renderer = renderer;
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.setSize(window.innerWidth, window.innerHeight);
+labelRenderer.domElement.style.position = 'fixed';
+labelRenderer.domElement.style.top = '0';
+labelRenderer.domElement.style.pointerEvents = 'none';
+document.body.appendChild(labelRenderer.domElement);
+state.labelRenderer = labelRenderer;
 
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0b1020);
-  state.scene = scene;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0c1324);
+state.scene = scene;
 
-  const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 2000);
-  camera.position.set(0, 14, 20);
-  state.camera = camera;
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 2000);
+camera.position.set(0, 8, 12);
+state.camera = camera;
 
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.enablePan = true;
-  controls.enableDamping = true;
-  controls.enableZoom = true;
-  controls.target.set(0, 2, 0);
-  controls.update();
-  state.controls = controls;
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enablePan = false;
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 6;
+controls.maxDistance = 60;
+controls.minPolarAngle = THREE.MathUtils.degToRad(15);
+controls.maxPolarAngle = THREE.MathUtils.degToRad(80);
+state.controls = controls;
 
-  // Lights
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x223344, 0.75);
+// Lights (simple)
+{
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x334466, 0.6);
   scene.add(hemi);
   const dir = new THREE.DirectionalLight(0xffffff, 0.9);
-  dir.position.set(30, 60, 20);
+  dir.position.set(30, 50, 20);
   dir.castShadow = true;
-  dir.shadow.mapSize.set(2048, 2048);
-  dir.shadow.camera.near = 1;
-  dir.shadow.camera.far = 200;
-  dir.shadow.camera.left = -80;
-  dir.shadow.camera.right = 80;
-  dir.shadow.camera.top = 80;
-  dir.shadow.camera.bottom = -80;
+  dir.shadow.mapSize.set(1024,1024);
   scene.add(dir);
-
-  // Background: sky dome + far skyline ring
-  makeSky();
-  makeSkylineRing();
-
-  // Flat ground + MAZE walls (no big buildings)
-  buildMazeEnvironment();
-
-  // Load humanoid avatar template (idle/walk)
-  await loadHumanoidTemplate();
-
-  setupContextMenu();
-  setupControls();
-
-  // Loop
-  window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth/window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-  });
-
-  renderer.setAnimationLoop(() => {
-    const dt = state.clock.getDelta();
-    tickMovement(dt);
-    interpolateRemotes();
-    tickMixers(dt);
-    updateMinimap();
-    controls.update();
-    renderer.render(scene, camera);
-  });
 }
 
-// ---------- Background helpers ----------
-function makeSky(){
-  const geo = new THREE.SphereGeometry(1000, 32, 32);
-  const mat = new THREE.ShaderMaterial({
-    side: THREE.BackSide,
-    uniforms:{ top:{value:new THREE.Color(0x0a1c3a)}, bottom:{value:new THREE.Color(0x050a16)}, offset:{value:33}, exponent:{value:0.6} },
-    vertexShader:`varying vec3 vWorldPosition; void main(){ vec4 worldPos= modelMatrix*vec4(position,1.0); vWorldPosition=worldPos.xyz; gl_Position = projectionMatrix*viewMatrix*worldPos; }`,
-    fragmentShader:`varying vec3 vWorldPosition; uniform vec3 top; uniform vec3 bottom; uniform float offset; uniform float exponent;
-      void main(){ float h = normalize(vWorldPosition + offset).y; gl_FragColor = vec4(mix(bottom, top, max(pow(max(h,0.0), exponent), 0.0)), 1.0); }`
-  });
-  const sky = new THREE.Mesh(geo, mat);
-  state.scene.add(sky);
-}
-function makeSkylineRing(){
-  // A distant ring with a stylized skyline texture (silhouette). Not collidable.
-  const tex = new THREE.TextureLoader().load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/uv_grid_opengl.jpg'); // placeholder
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(8, 1);
-  const mat = new THREE.MeshBasicMaterial({ map: tex, color: 0x0f1428, opacity: 0.35, transparent: true, depthWrite:false });
-  const geo = new THREE.CylinderGeometry(300, 300, 40, 64, 1, true);
-  const skyline = new THREE.Mesh(geo, mat);
-  skyline.position.y = 20;
-  skyline.rotation.y = Math.PI/8;
-  state.scene.add(skyline);
+// ---------- World (maze) ----------
+const maze = {
+  // simple generated corridors
+  size: 500, // ground size
+  wallHeight: 1.4,
+  wallThickness: 2.5,
+  cell: 24, // grid cell size
+};
+
+const mazeWalls = []; // {mesh,min,max}
+state.mazeWalls = mazeWalls;
+
+function addWall(x, z, w, d) {
+  const h = maze.wallHeight;
+  const g = new THREE.BoxGeometry(w, h, d);
+  const m = new THREE.MeshStandardMaterial({ color: 0x889199, metalness: 0.0, roughness: 0.9 });
+  const mesh = new THREE.Mesh(g, m);
+  mesh.position.set(x, h/2, z);
+  mesh.receiveShadow = true;
+  mesh.castShadow = true;
+  mesh.userData.isMazeWall = true;
+  scene.add(mesh);
+  // pre-bake AABB
+  mesh.updateWorldMatrix(true, true);
+  const box = new THREE.Box3().setFromObject(mesh);
+  mazeWalls.push({ mesh, min: box.min.clone(), max: box.max.clone() });
+  return mesh;
 }
 
-// ---------- Maze builder (flat city) ----------
-function buildMazeEnvironment(){
-  const s = state.scene;
-  const cell = state.maze.cellSize;
-  const W = state.maze.width, H = state.maze.height;
-
-  // Ground plane
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(W*cell, H*cell),
-    new THREE.MeshStandardMaterial({ color: 0xe8edf5, roughness: 0.95, metalness: 0 })
-  );
-  ground.receiveShadow = true;
+function buildMaze() {
+  // ground
+  const g = new THREE.PlaneGeometry(maze.size, maze.size);
+  const m = new THREE.MeshStandardMaterial({ color: 0xdfe6ea, metalness:0, roughness:1 });
+  const ground = new THREE.Mesh(g, m);
   ground.rotation.x = -Math.PI/2;
-  s.add(ground);
+  ground.receiveShadow = true;
+  scene.add(ground);
+  state.ground = ground;
 
-  // Road stripes to suggest avenues
-  const roadMat = new THREE.MeshStandardMaterial({ color: 0x1a2027, roughness: 0.7 });
-  for (let i= -2; i<=2; i++){
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(W*cell, 0.1, 3), roadMat);
-    stripe.position.set(0, 0.05, i*20);
-    stripe.receiveShadow = true;
-    s.add(stripe);
-  }
+  // create border walls
+  const half = maze.size / 2;
+  addWall(0, -half + maze.wallThickness/2, maze.size, maze.wallThickness);
+  addWall(0,  half - maze.wallThickness/2, maze.size, maze.wallThickness);
+  addWall(-half + maze.wallThickness/2, 0, maze.wallThickness, maze.size);
+  addWall( half - maze.wallThickness/2, 0, maze.wallThickness, maze.size);
 
-  // Generate a simple maze grid (Prim's or DFS); here a light, open layout
-  // We'll build low walls you cannot clip through.
-  const rng = (a,b)=> a + Math.floor(Math.random()*(b-a+1));
-  const grid = Array.from({length:H}, ()=>Array(W).fill(1)); // 1=wall, 0=space
-  function carve(x,z){
-    grid[z][x]=0;
-    const dirs = [[1,0],[-1,0],[0,1],[0,-1]].sort(()=>Math.random()-0.5);
-    for(const [dx,dz] of dirs){
-      const nx=x+dx*2, nz=z+dz*2;
-      if (nx>1 && nz>1 && nx<W-2 && nz<H-2 && grid[nz][nx]===1){
-        grid[z+dz][x+dx]=0;
-        carve(nx,nz);
-      }
+  // procedural corridors: rectangular blocks
+  const rows = 9, cols = 9;
+  const gap = maze.cell;
+  const startX = -half + 80;
+  const startZ = -half + 80;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      // random skip to create corridors
+      if ((r+c)%2===0) continue;
+      if (Math.random() < 0.35) continue;
+      const x = startX + c * gap * 2;
+      const z = startZ + r * gap * 2;
+      const w = gap * (1.2 + Math.random()*0.8);
+      const d = gap * (1.2 + Math.random()*0.8);
+      addWall(x, z, w, d);
     }
   }
-  carve(rng(2,W-3)|1, rng(2,H-3)|1); // start odd cell
 
-  const wallMat = new THREE.MeshStandardMaterial({ color: 0x9aa3ad, roughness: 0.85, metalness: 0.05 });
-  const curbMat = new THREE.MeshStandardMaterial({ color: 0xcfd6de, roughness: 0.9 });
-
-  // Curbs around playfield
-  const curb = new THREE.Mesh(new THREE.BoxGeometry(W*cell+2, 0.6, H*cell+2), curbMat);
-  curb.position.y = 0.3;
-  s.add(curb);
-
-  // Build walls + record AABBs for collision
-  const walls = [];
-  const wallHeight = 2.2;
-  for (let z=0; z<H; z++){
-    for (let x=0; x<W; x++){
-      if (grid[z][x]===1){
-        const wx = (x - W/2 + 0.5) * cell;
-        const wz = (z - H/2 + 0.5) * cell;
-        const wall = new THREE.Mesh(new THREE.BoxGeometry(cell, wallHeight, cell), wallMat);
-        wall.castShadow = true; wall.receiveShadow = true;
-        wall.position.set(wx, wallHeight/2, wz);
-        s.add(wall);
-        walls.push(aabbFromMesh(wall, 0.02));
-      }
-    }
+  // minimal city-like backplate (skyline silhouettes far away)
+  const skyline = new THREE.Group();
+  const skyMat = new THREE.MeshBasicMaterial({ color: 0x20263a, depthWrite:false });
+  for (let i=0;i<30;i++){
+    const w = 20 + Math.random()*60;
+    const h = 20 + Math.random()*90;
+    const d = 5 + Math.random()*10;
+    const mx = (Math.random()<0.5?-1:1) * (half + 40 + Math.random()*80);
+    const mz = -half + Math.random()*maze.size;
+    const box = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), skyMat);
+    box.position.set(mx, h/2, mz);
+    skyline.add(box);
   }
-  state.maze.walls = walls;
-
-  // Bounds for minimap clamp
-  state.maze.bounds = {
-    minX: -(W*cell)/2+1,
-    maxX:  (W*cell)/2-1,
-    minZ:  -(H*cell)/2+1,
-    maxZ:  (H*cell)/2-1
-  };
-}
-function aabbFromMesh(mesh, pad=0){
-  const b = new THREE.Box3().setFromObject(mesh);
-  return {
-    minX: b.min.x - pad, maxX: b.max.x + pad,
-    minZ: b.min.z - pad, maxZ: b.max.z + pad,
-    yTop: b.max.y, yBottom: b.min.y
-  };
-}
-function collidePoint(next){
-  // Simple AABB resolution against maze walls
-  for (const w of state.maze.walls){
-    if (next.x > w.minX && next.x < w.maxX && next.z > w.minZ && next.z < w.maxZ){
-      return true;
-    }
-  }
-  return false;
+  skyline.renderOrder = -1;
+  scene.add(skyline);
 }
 
-// ---------- Humanoid avatar (GLTF) ----------
-async function loadHumanoidTemplate(){
-  const loader = new GLTFLoader();
-  // Humanoid sample model with idle/walk animations
-  const url = 'https://threejs.org/examples/models/gltf/RobotExpressive/RobotExpressive.glb';
-  const gltf = await loader.loadAsync(url);
-  const root = gltf.scene;
-  root.traverse(o => { if (o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
-  state.avatarTemplate = root;
-  // Collect animations (RobotExpressive has multiple)
-  state.avatarClips = gltf.animations || [];
-  state.avatarReady = true;
+// ---------- Avatar ----------
+function createAvatarMesh() {
+  // simple robot-ish avatar (no going through walls)
+  const group = new THREE.Group();
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x18e2a5, metalness:0.2, roughness:0.6 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x222, metalness:0.5, roughness:0.8 });
 
-  // Process any pending spawns
-  state.pendingSpawns.splice(0).forEach(s => reallyAddEntity(s.id, s.x, s.z, s.name, s.avatar));
-}
-function buildAvatar(name, emoji){
-  let node;
-  if (state.avatarTemplate){
-    node = state.avatarTemplate.clone(true);
-    node.scale.set(0.9, 0.9, 0.9);
-  } else {
-    // fallback capsule if GLTF fails
-    const body = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.5, 1.0, 8, 16),
-      new THREE.MeshStandardMaterial({ color: 0x00d0a0, metalness: 0.1, roughness: 0.5 })
-    );
-    node = new THREE.Group();
-    body.castShadow = true; body.receiveShadow = true;
-    node.add(body);
-  }
+  // body (capsule-like)
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.4, 0.8, 8, 16), bodyMat);
+  body.castShadow = true;
+  body.receiveShadow = true;
+  group.add(body);
 
-  // Floating nameplate
-  const label = makeLabelSprite(emoji ? `${emoji} ${name}` : name);
-  label.position.set(0, 2.4, 0);
-  node.add(label);
-  return node;
-}
-function makeLabelSprite(text){
-  const canvas = document.createElement('canvas');
-  canvas.width = 512; canvas.height = 128;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = 'rgba(0,0,0,0.75)';
-  ctx.fillRect(0,0,512,128);
-  ctx.fillStyle = '#00ff88';
-  ctx.font = 'bold 56px Arial';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, 256, 64);
-  const tex = new THREE.CanvasTexture(canvas);
-  const mat = new THREE.SpriteMaterial({ map: tex, depthWrite:false });
-  const sp = new THREE.Sprite(mat);
-  sp.scale.set(2.2, 0.6, 1);
-  return sp;
+  // head
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.32, 24, 16), dark);
+  head.position.y = 0.95;
+  head.castShadow = true;
+  group.add(head);
+
+  // visor
+  const visor = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.18, 0.05), new THREE.MeshStandardMaterial({color:0x111111, emissive:0x222222}));
+  visor.position.set(0, 0.95, 0.31);
+  group.add(visor);
+
+  // legs
+  const legMat = new THREE.MeshStandardMaterial({ color: 0x996633, metalness:0, roughness:0.9 });
+  const legL = new THREE.Mesh(new THREE.CylinderGeometry(0.08,0.09,0.60, 12), legMat);
+  legL.position.set(-0.18, -0.5, 0);
+  const legR = legL.clone();
+  legR.position.x = 0.18;
+  group.add(legL, legR);
+
+  // scale to avatar size
+  group.scale.setScalar(state.AVATAR_SIZE);
+  return group;
 }
 
-// ---------- Entities ----------
-function addEntityBuffered(id, x, z, name, avatar){
+function makeNameTag(displayName) {
+  const div = document.createElement('div');
+  div.className = 'nametag';
+  div.textContent = displayName;
+  const obj = new CSS2DObject(div);
+  obj.position.set(0, 1.9, 0);
+  return obj;
+}
+
+function addEntity(id, x, z, name, emoji) {
   if (state.entities.has(id)) return;
-  if (!state.avatarReady){
-    state.pendingSpawns.push({id, x, z, name, avatar});
-    return;
-  }
-  reallyAddEntity(id, x, z, name, avatar);
-}
-function reallyAddEntity(id, x, z, name, avatar){
-  const node = buildAvatar(name||id, avatar);
-  node.position.set(x||0, 0, z||0);
-  state.scene.add(node);
 
-  // Animate (idle default)
-  const mixer = new THREE.AnimationMixer(node);
-  let idle;
-  // try find an idle-like clip
-  idle = state.avatarClips.find(c=>/idle/i.test(c.name)) || state.avatarClips[0];
-  if (idle) {
-    const action = mixer.clipAction(idle);
-    action.play();
-  }
-  state.mixers.set(id, mixer);
+  const node = createAvatarMesh();
+  node.position.set(x||0, 0, z||0);
+  scene.add(node);
+
+  const tag = makeNameTag((emoji? (emoji+' '):'') + (name||id));
+  node.add(tag);
 
   state.entities.set(id, {
-    node, name: name||id, avatar: avatar||'🙂', target: node.position.clone(), speed: 5,
-    currentAction: 'idle'
+    node, tag,
+    name: name || id,
+    avatar: emoji || '🙂',
+    target: node.position.clone(),
   });
 }
-function removeEntity(id){
+function removeEntity(id) {
   const e = state.entities.get(id);
   if (!e) return;
-  state.scene.remove(e.node);
-  state.mixers.delete(id);
+  if (e.tag) e.tag.element?.remove();
+  e.node?.removeFromParent();
   state.entities.delete(id);
 }
-function setWalkState(id, walking){
-  const mixer = state.mixers.get(id);
-  if (!mixer || state.avatarClips.length===0) return;
-  const ent = state.entities.get(id);
-  if (!ent) return;
 
-  const idle = state.avatarClips.find(c=>/idle/i.test(c.name)) || state.avatarClips[0];
-  const walk = state.avatarClips.find(c=>/(walk|run)/i.test(c.name)) || null;
+// ---------- Movement & Collision ----------
+function resolveCollisions(currentPos, desiredPos) {
+  const pos = desiredPos.clone();
+  for (const w of mazeWalls) {
+    const min = new THREE.Vector3(w.min.x - state.AVATAR_RADIUS, w.min.y - 0.2, w.min.z - state.AVATAR_RADIUS);
+    const max = new THREE.Vector3(w.max.x + state.AVATAR_RADIUS, w.max.y + state.AVATAR_HEIGHT, w.max.z + state.AVATAR_RADIUS);
 
-  if (walking && ent.currentAction!=='walk' && walk){
-    mixer.stopAllAction();
-    mixer.clipAction(walk).reset().fadeIn(0.15).play();
-    ent.currentAction='walk';
-  } else if (!walking && ent.currentAction!=='idle' && idle){
-    mixer.stopAllAction();
-    mixer.clipAction(idle).reset().fadeIn(0.15).play();
-    ent.currentAction='idle';
+    if (pos.x >= min.x && pos.x <= max.x &&
+        currentPos.y >= min.y && currentPos.y <= max.y &&
+        pos.z >= min.z && pos.z <= max.z) {
+
+      const dx = Math.min(max.x - pos.x, pos.x - min.x);
+      const dz = Math.min(max.z - pos.z, pos.z - min.z);
+
+      if (dx < dz) {
+        if ((pos.x - min.x) < (max.x - pos.x)) pos.x = min.x;
+        else pos.x = max.x;
+      } else {
+        if ((pos.z - min.z) < (max.z - pos.z)) pos.z = min.z;
+        else pos.z = max.z;
+      }
+    }
+  }
+  return pos;
+}
+
+function tickMovement(dt) {
+  if (!state.player) return;
+  const me = state.player;
+
+  // camera-forward on XZ
+  const camDir = new THREE.Vector3();
+  camera.getWorldDirection(camDir);
+  camDir.y = 0; camDir.normalize();
+  const right = new THREE.Vector3(camDir.z, 0, -camDir.x).normalize();
+
+  const speed = 4.0;
+  let move = new THREE.Vector3();
+
+  // A=left, D=right, W=forward, S=back
+  if (state.keys['a']) move.add(right.clone().multiplyScalar(-1));
+  if (state.keys['d']) move.add(right);
+  if (state.keys['w']) move.add(camDir);
+  if (state.keys['s']) move.add(camDir.clone().multiplyScalar(-1));
+
+  if (move.lengthSq() === 0) return;
+  move.normalize().multiplyScalar(speed * dt);
+
+  const desired = me.node.position.clone().add(move);
+  const resolved = resolveCollisions(me.node.position, desired);
+
+  // clamp world bounds
+  const bound = (maze.size/2) - 5;
+  resolved.x = clamp(resolved.x, -bound, bound);
+  resolved.z = clamp(resolved.z, -bound, bound);
+
+  me.node.position.copy(resolved);
+
+  // look towards movement direction (smooth)
+  const look = me.node.position.clone().add(move);
+  me.node.lookAt(look.x, me.node.position.y, look.z);
+
+  // camera follow target
+  const target = new THREE.Vector3(resolved.x, 1.6, resolved.z);
+  controls.target.lerp(target, 0.1);
+
+  // send position throttled
+  const now = performance.now();
+  if (!tickMovement.last || now - tickMovement.last > 90) {
+    tickMovement.last = now;
+    if (state.ws?.readyState === WebSocket.OPEN) {
+      state.ws.send(JSON.stringify({ type:'move', x: resolved.x, z: resolved.z }));
+    }
   }
 }
-function tickMixers(dt){
-  for (const m of state.mixers.values()) m.update(dt);
+
+function interpolateRemotes() {
+  state.entities.forEach((e, id) => {
+    if (id === state.playerId) return;
+    if (!e.target) return;
+    e.node.position.lerp(e.target, 0.15);
+  });
 }
 
-// ---------- Input & Movement with collisions ----------
-const keys = {};
-function setupControls(){
-  window.addEventListener('keydown', (e)=>{ keys[e.key.toLowerCase()] = true; });
-  window.addEventListener('keyup', (e)=>{ keys[e.key.toLowerCase()] = false; });
+// ---------- Minimap ----------
+function updateMinimap() {
+  const c = ui.minimapCanvas;
+  const ctx = c.getContext('2d');
+  c.width = 220; c.height = 220;
 
-  ui.sendBtn.onclick = () => {
-    const text = ui.msg.value.trim(); if (!text) return;
-    sendMessage(text); ui.msg.value = '';
-  };
-  ui.msg.addEventListener('keydown', e => { if (e.key === 'Enter') ui.sendBtn.click(); });
+  // bg
+  ctx.fillStyle = 'rgba(10,15,24,0.95)';
+  ctx.fillRect(0,0,c.width,c.height);
 
-  // Avatar picker
+  // grid
+  ctx.strokeStyle = '#1a2d3a';
+  ctx.lineWidth = 1;
+  for (let i=0;i<=11;i++){
+    const p = (i*(c.width/11))|0;
+    ctx.beginPath(); ctx.moveTo(p,0); ctx.lineTo(p,c.height); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0,p); ctx.lineTo(c.width,p); ctx.stroke();
+  }
+
+  const half = maze.size/2;
+  function mapXZ(x,z){
+    const nx = (x + half) / maze.size;
+    const nz = (z + half) / maze.size;
+    return [ nx * c.width, nz * c.height ];
+  }
+
+  state.entities.forEach((ent, id)=>{
+    const [x,z] = mapXZ(ent.node.position.x, ent.node.position.z);
+    const isMe = (id === state.playerId);
+    ctx.fillStyle = isMe ? '#00ff88' : '#9aa';
+    ctx.beginPath();
+    ctx.arc(x, z, isMe ? 4 : 3, 0, Math.PI*2);
+    ctx.fill();
+    if (isMe) {
+      ctx.strokeStyle = '#00ff88';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x,z,8,0,Math.PI*2); ctx.stroke();
+    }
+  });
+}
+
+// ---------- Context Menu ----------
+function setupContextMenu() {
+  const menu = ui.rightMenu;
+
+  window.addEventListener('contextmenu', (ev) => {
+    ev.preventDefault();
+
+    // pick nearest entity by projecting screen space & distance
+    // simpler: loop entities and compute screen distance
+    let pickedId = null;
+    let best = 28; // px tolerance
+    const rect = renderer.domElement.getBoundingClientRect();
+
+    state.entities.forEach((ent, id) => {
+      const v = ent.node.position.clone();
+      v.y += 1.2;
+      v.project(camera);
+      const sx = (v.x * 0.5 + 0.5) * rect.width;
+      const sy = ( -v.y * 0.5 + 0.5) * rect.height;
+      const d = Math.hypot(sx - ev.clientX + rect.left, sy - ev.clientY + rect.top);
+      if (d < best) { best = d; pickedId = id; }
+    });
+
+    menu.style.left = `${ev.clientX}px`;
+    menu.style.top  = `${ev.clientY}px`;
+    menu.style.display = 'block';
+
+    const setPublic = () => {
+      state.targetId = null;
+      ui.targetName.textContent = 'Openbaar';
+      menu.style.display = 'none';
+    };
+
+    ui.mClear.textContent = '🔓 Publieke chat';
+    ui.mClear.onclick = setPublic;
+
+    if (pickedId && pickedId !== state.playerId) {
+      const ent = state.entities.get(pickedId);
+      ui.mChat.textContent = `💬 Chat met ${ent?.name || 'onbekend'}`;
+      ui.mReport.textContent = `⚠️ Rapporteer ${ent?.name || 'onbekend'}`;
+
+      ui.mChat.onclick = () => {
+        // distance gate
+        const me = state.player?.node?.position;
+        const other = ent?.node?.position;
+        if (me && other) {
+          const dist = me.distanceTo(other);
+          if (dist > CHAT_DISTANCE) {
+            addLine('SYSTEM:', `Je staat te ver weg om privé te praten (afstand ${dist.toFixed(1)}m; max ${CHAT_DISTANCE.toFixed(1)}m).`, false, true);
+            menu.style.display = 'none';
+            return;
+          }
+        }
+        state.targetId = pickedId;
+        ui.targetName.textContent = ent?.name || 'Openbaar';
+        menu.style.display = 'none';
+      };
+      ui.mReport.onclick = () => {
+        if (state.ws?.readyState === WebSocket.OPEN) {
+          state.ws.send(JSON.stringify({ type:'report', reportedId: pickedId }));
+        }
+        menu.style.display = 'none';
+      };
+    } else {
+      ui.mChat.textContent = '—';
+      ui.mReport.textContent = '—';
+      ui.mChat.onclick = () => menu.style.display = 'none';
+      ui.mReport.onclick = () => menu.style.display = 'none';
+    }
+
+    setTimeout(()=> window.addEventListener('click', ()=> menu.style.display='none', {once:true}), 80);
+  });
+}
+
+// ---------- Chat ----------
+function sendMessage(text) {
+  if (!text || !text.trim()) return;
+  const payload = { type:'chat', message: text.trim() };
+
+  // distance gate if private
+  if (state.targetId && state.entities.has(state.targetId) && state.player) {
+    const me = state.player.node.position;
+    const other = state.entities.get(state.targetId).node.position;
+    const dist = me.distanceTo(other);
+    if (dist > CHAT_DISTANCE) {
+      addLine('SYSTEM:', `Je staat te ver weg van ${state.entities.get(state.targetId).name} om privé te praten (${dist.toFixed(1)}m).`, false, true);
+      return;
+    }
+    payload.targetId = state.targetId;
+  }
+
+  if (state.ws?.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify(payload));
+  }
+}
+
+// ---------- Input & UI ----------
+function setupUI() {
+  // chat box
+  ui.sendBtn.onclick = () => { const t = ui.msg.value.trim(); if (!t) return; sendMessage(t); ui.msg.value = ''; };
+  ui.msg.addEventListener('keydown', (e) => { if (e.key === 'Enter') ui.sendBtn.click(); });
+
+  // avatar grid
   const avatarList = ['🙂','😀','🙃','😎','🧑','👩','👨','🧔','👱‍♀️','👱‍♂️','🧕','👳'];
   avatarList.forEach(emoji => {
     const d = document.createElement('div');
-    d.className = 'av'; d.textContent = emoji;
+    d.className = 'av';
+    d.textContent = emoji;
     d.onclick = () => {
       document.querySelectorAll('.av').forEach(x => x.classList.remove('sel'));
-      d.classList.add('sel'); state.avatarEmoji = emoji;
+      d.classList.add('sel');
+      state.avatarEmoji = emoji;
       ui.startBtn.disabled = !ui.nameInput.value.trim();
     };
     ui.avatars.appendChild(d);
   });
   ui.nameInput.oninput = () => { ui.startBtn.disabled = !ui.nameInput.value.trim(); };
 
+  // start
   ui.startBtn.addEventListener('click', () => {
     state.username = ui.nameInput.value.trim();
-    state.playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
+    state.playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
     ui.overlay.style.display = 'none';
     ui.loadingSpinner.style.display = 'block';
     connectWS();
   });
-}
-function tickMovement(dt){
-  const me = state.player;
-  if (!me) return;
 
-  // WASD vector
-  let vx = 0, vz = 0;
-  if (keys['w'] || keys['arrowup']) vz -= 1;
-  if (keys['s'] || keys['arrowdown']) vz += 1;
-  if (keys['a'] || keys['arrowleft']) vx -= 1;
-  if (keys['d'] || keys['arrowright']) vx += 1;
-
-  if (vx===0 && vz===0) { setWalkState(state.playerId, false); return; }
-
-  const sprint = keys['shift'] ? 1.7 : 1.0;
-  const speed = 5 * sprint;
-  const dir = new THREE.Vector3(vx, 0, vz).normalize().multiplyScalar(speed * dt);
-
-  // Propose next position
-  const next = me.node.position.clone().add(dir);
-
-  // Prevent going out of bounds
-  const b = state.maze.bounds;
-  next.x = Math.min(Math.max(next.x, b.minX), b.maxX);
-  next.z = Math.min(Math.max(next.z, b.minZ), b.maxZ);
-
-  // Collision: try axis by axis (simple resolution)
-  const tryX = me.node.position.clone(); tryX.x = next.x;
-  if (!collidePoint(tryX)) me.node.position.x = next.x;
-
-  const tryZ = me.node.position.clone(); tryZ.z = next.z;
-  if (!collidePoint(tryZ)) me.node.position.z = next.z;
-
-  // Face move direction
-  if (dir.lengthSq() > 1e-4){
-    const yaw = Math.atan2(-dir.z, dir.x) + Math.PI/2;
-    me.node.rotation.y = yaw;
-  }
-
-  setWalkState(state.playerId, true);
-
-  // Smooth follow camera target
-  const camTarget = me.node.position.clone();
-  camTarget.y = 2;
-  state.controls.target.lerp(camTarget, 0.15);
-
-  // Throttled network update
-  const now = performance.now();
-  if (!tickMovement.last || now - tickMovement.last > 90){
-    tickMovement.last = now;
-    if (state.ws?.readyState === WebSocket.OPEN){
-      state.ws.send(JSON.stringify({ type:'move', x: me.node.position.x, z: me.node.position.z }));
-    }
-  }
-}
-function interpolateRemotes(){
-  state.entities.forEach((e,id)=>{
-    if (id===state.playerId) return;
-    if (!e.target) return;
-    e.node.position.lerp(e.target, 0.18);
+  // key input
+  window.addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
+    state.keys[k] = true;
+    // prevent scrolling with arrows/space
+    if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(k)) e.preventDefault();
   });
+  window.addEventListener('keyup', (e) => { state.keys[e.key.toLowerCase()] = false; });
+
+  setupContextMenu();
 }
 
-// ---------- Context menu ----------
-function setupContextMenu(){
-  canvas.addEventListener('contextmenu', ev=>{
-    ev.preventDefault();
-    // Raycast for entity (hit testing labels/meshes)
-    const mouse = new THREE.Vector2(
-      (ev.clientX / window.innerWidth) * 2 - 1,
-      -(ev.clientY / window.innerHeight) * 2 + 1
-    );
-    const ray = new THREE.Raycaster();
-    ray.setFromCamera(mouse, state.camera);
-    const meshes = [];
-    state.entities.forEach(e=>e.node.traverse(o=>{ if (o.isMesh) meshes.push(o); }));
-    const hit = ray.intersectObjects(meshes, true)[0];
-    const menu = ui.rightMenu;
-    menu.style.left = ev.clientX + 'px';
-    menu.style.top = ev.clientY + 'px';
-    menu.style.display = 'block';
-
-    let targetId = null, targetName = 'onbekend';
-    if (hit){
-      // find owning entity
-      state.entities.forEach((e,id)=>{
-        if (e.node === hit.object && !targetId){ targetId = id; targetName = e.name; }
-        else if (hit.object.parent && e.node.uuid === hit.object.parent.uuid && !targetId){ targetId = id; targetName = e.name; }
-      });
-    }
-    if (targetId){
-      ui.mChat.textContent = '💬 Chat met ' + targetName;
-      ui.mReport.textContent = '⚠️ Rapporteer ' + targetName;
-      ui.mChat.onclick = ()=>{ state.targetId = targetId; ui.targetName.textContent = targetName; menu.style.display='none'; };
-      ui.mReport.onclick = ()=>{
-        if (state.ws?.readyState === WebSocket.OPEN){
-          state.ws.send(JSON.stringify({ type:'report', reportedId: targetId }));
-        }
-        menu.style.display='none';
-      };
-    } else {
-      ui.mChat.textContent='Geen avatar hier'; ui.mReport.textContent='—';
-      ui.mChat.onclick = ()=> menu.style.display='none';
-      ui.mReport.onclick = ()=> menu.style.display='none';
-    }
-    ui.mClear.onclick = ()=>{ state.targetId=null; ui.targetName.textContent='Openbaar'; menu.style.display='none'; };
-    setTimeout(()=> window.addEventListener('click', ()=> menu.style.display='none', {once:true}), 100);
-  });
-}
-
-// ---------- Minimap ----------
-function updateMinimap(){
-  const ctx = ui.minimapCanvas.getContext('2d');
-  ui.minimapCanvas.width = 200; ui.minimapCanvas.height = 200;
-  ctx.fillStyle = 'rgba(10, 15, 24, 0.95)'; ctx.fillRect(0,0,200,200);
-
-  // grid
-  ctx.strokeStyle = '#1a2d3a'; ctx.lineWidth=1;
-  for (let i=0;i<=10;i++){
-    const p = i*20; ctx.beginPath(); ctx.moveTo(p,0); ctx.lineTo(p,200); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0,p); ctx.lineTo(200,p); ctx.stroke();
-  }
-
-  // entities
-  const b = state.maze.bounds;
-  const sx = x => 200 * (x - b.minX) / (b.maxX - b.minX);
-  const sz = z => 200 * (z - b.minZ) / (b.maxZ - b.minZ);
-
-  state.entities.forEach((ent,id)=>{
-    const x = sx(ent.node.position.x), z = sz(ent.node.position.z);
-    const me = id===state.playerId;
-    ctx.fillStyle = me ? '#00ff88' : '#888';
-    ctx.beginPath(); ctx.arc(x,z, me?5:3, 0, Math.PI*2); ctx.fill();
-    if (me){ ctx.strokeStyle='#00ff88'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(x,z,10,0,Math.PI*2); ctx.stroke(); }
-  });
+function updateHUDConnection(statusText, color='#9fffdc') {
+  ui.conn.textContent = statusText;
+  ui.conn.style.color = color;
 }
 
 // ---------- WebSocket ----------
-function connectWS(){
+function connectWS() {
   state.ws = new WebSocket(WS_URL);
 
-  state.ws.addEventListener('open', ()=>{
-    ui.conn.textContent = '● Connected'; ui.conn.style.color = '#00ff88';
+  state.ws.addEventListener('open', () => {
+    updateHUDConnection('● Connected', '#00ff88');
     state.ws.send(JSON.stringify({
-      type:'join', playerId: state.playerId, username: state.username, avatar: state.avatarEmoji, x:0, z:0
+      type:'join',
+      playerId: state.playerId,
+      username: state.username,
+      avatar: state.avatarEmoji,
+      x: 0, z: 0
     }));
     addLine('SYSTEM:', 'Verbonden met server. Wereld laden...', false, true);
   });
 
-  state.ws.addEventListener('message', e=>{
-    let data; try{ data = JSON.parse(e.data); } catch{ return; }
-    switch(data.type){
+  state.ws.addEventListener('message', (e) => {
+    let data; try { data = JSON.parse(e.data); } catch { return; }
+
+    switch(data.type) {
       case 'init': {
-        data.players.forEach(p=> addEntityBuffered(p.id, p.x, p.z, p.username, p.avatar));
-        data.npcs.forEach(n=> addEntityBuffered(n.id, n.x, n.z, n.name, '🤖'));
+        // world already built; create entities
+        data.players.forEach(p => addEntity(p.id, p.x, p.z, p.username, p.avatar));
+        data.npcs.forEach(n => addEntity(n.id, n.x, n.z, n.name, '🤖'));
 
+        // ensure self exists
+        if (!state.entities.has(state.playerId)) addEntity(state.playerId, 0,0, state.username, state.avatarEmoji);
         state.player = state.entities.get(state.playerId);
-        if (!state.player){ addEntityBuffered(state.playerId, 0,0, state.username, state.avatarEmoji); state.player = state.entities.get(state.playerId); }
 
-        if (state.player){
-          state.controls.target.copyFrom(state.player.node.position); state.controls.target.y = 2;
-        }
-
-        if (data.weather){
+        // weather & time
+        if (data.weather) {
           updateWeather(data.weather.type, data.weather.intensity);
           updateTimeOfDay(data.weather.gameTime);
         }
-        ui.statPlayers.textContent = String(data.players.length);
+
+        // focus camera
+        controls.target.copy(state.player.node.position);
+
+        // hide spinner
         ui.loadingSpinner.style.display = 'none';
         break;
       }
-      case 'player_joined':
-        if (data.player.id !== state.playerId){
-          addEntityBuffered(data.player.id, data.player.x, data.player.z, data.player.username, data.player.avatar);
-          addLine('SYSTEM:', `${data.player.username} heeft zich aangesloten`, false, true);
-          ui.statPlayers.textContent = String(parseInt(ui.statPlayers.textContent)+1);
-        }
+
+      case 'player_joined': {
+        const p = data.player;
+        if (p.id !== state.playerId) addEntity(p.id, p.x, p.z, p.username, p.avatar);
+        addLine('SYSTEM:', `${p.username} heeft zich aangesloten`, false, true);
         break;
+      }
+
       case 'player_left':
         removeEntity(data.playerId);
-        ui.statPlayers.textContent = String(Math.max(0, parseInt(ui.statPlayers.textContent)-1));
         break;
+
       case 'player_move': {
         const ent = state.entities.get(data.playerId);
-        if (ent){ ent.target = new THREE.Vector3(data.x, 0, data.z); }
+        if (ent) ent.target = new THREE.Vector3(data.x, 0, data.z);
         break;
       }
+
       case 'npc_update':
-        data.npcs.forEach(npc=>{
-          const ent = state.entities.get(npc.id);
-          if (ent){
-            // Snap incoming NPC positions to navigable space if they hit a wall
-            const v = new THREE.Vector3(npc.x, 0, npc.z);
-            if (!collidePoint(v)) ent.target = v;
-          }
+        data.npcs.forEach(n => {
+          const e = state.entities.get(n.id);
+          if (e) e.target = new THREE.Vector3(n.x, 0, n.z);
         });
         break;
+
       case 'chat': {
-        const isPrivate = data.private || false;
-        addLine(isPrivate ? `${data.username} (privé):` : `${data.username}:`, data.message, isPrivate);
+        const isPrivate = !!data.private;
+        const sender = data.username;
+        const msg = data.message;
+        addLine(isPrivate ? `${sender} (privé):` : `${sender}:`, msg, isPrivate, false);
         break;
       }
-      case 'penalty': updateCredits(data.amount, data.reason); break;
+
+      case 'penalty':
+        updateCredits(data.amount, data.reason);
+        break;
+
       case 'report_result':
         state.stats.reportsTotal++;
-        if (data.correct){ state.stats.reportsCorrect++; updateCredits(50, `Correct! ${data.reportedName} is een echte speler`); }
+        if (data.correct) { state.stats.reportsCorrect++; updateCredits(50, `Correct! ${data.reportedName} is een echte speler`); }
         else { updateCredits(-30, `Onjuist rapport over ${data.reportedName}`); }
-        updateStats(); break;
-      case 'weather_update': updateWeather(data.weather, data.intensity); break;
-      case 'time_update':    updateTimeOfDay(data.gameTime); break;
-      case 'system': addLine('SYSTEM:', data.message, false, true); break;
+        updateStats();
+        break;
+
+      case 'weather_update':
+        updateWeather(data.weather, data.intensity);
+        break;
+
+      case 'time_update':
+        updateTimeOfDay(data.gameTime);
+        break;
+
+      case 'system':
+        addLine('SYSTEM:', data.message, false, true);
+        break;
+
       case 'position_correction':
-        if (state.player){
-          state.player.node.position.x = data.x; state.player.node.position.z = data.z;
+        // server anti-cheat
+        if (state.player) {
+          state.player.node.position.x = data.x;
+          state.player.node.position.z = data.z;
         }
         break;
     }
   });
 
-  state.ws.addEventListener('close', ()=>{
-    ui.conn.textContent = '● Reconnecting...'; ui.conn.style.color = '#ff8800';
+  state.ws.addEventListener('close', () => {
+    updateHUDConnection('● Reconnecting...', '#ff8800');
     addLine('SYSTEM:', 'Verbinding verbroken. Opnieuw verbinden...', false, true);
     setTimeout(connectWS, 2000);
   });
-  state.ws.addEventListener('error', err => console.error('[WS] Error', err));
+  state.ws.addEventListener('error', (err) => console.error('[WS error]', err));
+}
+
+// ---------- Render loop ----------
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(0.05, state.clock.getDelta());
+
+  tickMovement(dt);
+  interpolateRemotes();
+  updateMinimap();
+
+  controls.update();
+  renderer.render(scene, camera);
+  labelRenderer.render(scene, camera);
 }
 
 // ---------- Boot ----------
-createScene().then(()=> console.log('[Game] Scene ready'));
+function boot() {
+  buildMaze();
+  setupUI();
+
+  window.addEventListener('resize', () => {
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    labelRenderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  animate();
+  console.log('[Client] Ready');
+}
+
+boot();
