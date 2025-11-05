@@ -1,8 +1,8 @@
 // public/app.js — Three.js client with labels, collisions, proximity chat, right-click popup
 // Loads Three.js as ES modules from CDN (no bundler required).
 
-import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js';
-import { OrbitControls } from 'https://unpkg.com/three@0.158.0/examples/jsm/controls/OrbitControls.js';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 // ------------------------------
 // UI references (no avatar picker)
