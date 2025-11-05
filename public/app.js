@@ -1,8 +1,9 @@
 // app.js – Three.js client with city, avatars, WASD, chat, NPCs, weather/time
 
 // ---------- Imports (ESM from UNPKG) ----------
-import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
-import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader }   from 'three/addons/loaders/GLTFLoader.js';
 
 // ---------- Constants / UI ----------
 const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
