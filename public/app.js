@@ -64,9 +64,10 @@ const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, s
 const createScene = async () => {
   const scene = new BABYLON.Scene(engine);
   scene.clearColor = new BABYLON.Color4(0.03,0.05,0.12,1);
-  scene.imageProcessing.toneMappingEnabled = true;
-  scene.imageProcessing.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
-  scene.imageProcessing.exposure = 1.2;
+  const ip = scene.imageProcessingConfiguration;
+  ip.toneMappingEnabled = true;
+  ip.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
+  ip.exposure = 1.2;
 
   // Camera: ArcRotate with zoom/pan/rotate
   const camera = new BABYLON.ArcRotateCamera('cam',
