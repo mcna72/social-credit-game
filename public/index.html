@@ -5,14 +5,18 @@
   <title>Social Credit — Amsterdam Enhanced Edition</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
 
-  <!-- Babylon core + loaders + GUI + materials (must load BEFORE app.js) -->
-  <script src="https://cdn.babylonjs.com/babylon.js"></script>
-  <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
-  <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script>
-  <script src="https://cdn.babylonjs.com/materialsLibrary/babylonjs.materials.min.js"></script>
+  <!-- Import map so the browser can resolve "three" and "three/addons/*" without a bundler -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
 
-  <!-- Optional favicon to silence 404 noise in console -->
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%2300ff88'/%3E%3C/svg%3E"/>
+  <!-- Prevent favicon 404 -->
+  <link rel="icon" href="data:,">
 
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
@@ -23,11 +27,11 @@
     #hud{position:fixed;top:16px;left:16px;background:rgba(0,0,0,.75);border:2px solid #00ff88;padding:12px 18px;border-radius:12px;z-index:30;backdrop-filter:blur(10px)}
     #credit{color:#00ff88;font-weight:700;font-size:28px}
     #conn{position:fixed;left:16px;top:80px;background:rgba(0,0,0,.65);border:1px solid #333;border-radius:8px;padding:6px 12px;color:#9fffdc;z-index:30;font-size:13px}
-
+    
     /* Weather & Time indicator */
     #weatherInfo{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.65);border:1px solid #333;border-radius:8px;padding:8px 16px;z-index:30;display:flex;gap:20px;align-items:center;font-size:14px}
     #weatherIcon{font-size:24px}
-
+    
     /* Minimap */
     #minimap{position:fixed;top:16px;right:16px;width:200px;height:200px;background:rgba(0,0,0,.8);border:2px solid #00ff88;border-radius:8px;z-index:30}
     #minimapCanvas{width:100%;height:100%;border-radius:6px}
@@ -100,9 +104,11 @@
   <canvas id="renderCanvas"></canvas>
 
   <!-- HUD -->
-  <div id="hud">Social Credit: <span id="credit">1000</span></div>
+  <div id="hud">
+    Social Credit: <span id="credit">1000</span>
+  </div>
   <div id="conn">Connecting...</div>
-
+  
   <!-- Weather & Time -->
   <div id="weatherInfo">
     <span id="weatherIcon">☀️</span>
@@ -110,7 +116,9 @@
   </div>
 
   <!-- Minimap -->
-  <div id="minimap"><canvas id="minimapCanvas"></canvas></div>
+  <div id="minimap">
+    <canvas id="minimapCanvas"></canvas>
+  </div>
 
   <!-- Stats -->
   <div id="statsPanel">
@@ -149,7 +157,7 @@
       <div id="avatars"></div>
       <div id="startRow">
         <button id="start" disabled>Systeem betreden</button>
-        <label id="langLabel">Taal:
+        <label id="langLabel">Taal: 
           <select id="lang">
             <option value="nl">🇳🇱 Nederlands</option>
             <option value="en">🇬🇧 English</option>
@@ -169,7 +177,7 @@
     <div id="actClear">🔓 Zet op Openbaar</div>
   </div>
 
-  <!-- Your app code LAST, as an ES module -->
+  <!-- Your Three.js client -->
   <script type="module" src="/app.js"></script>
 </body>
 </html>
