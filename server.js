@@ -1,20 +1,13 @@
-// server.js – backend for Social Credit Simulation (Amsterdam Edition)
-// --------------------------------------------------------------
-// • Serves the high-render Three.js front-end in /public
-// • Hosts a WebSocket server for player + NPC sync
-// • Performs chat moderation via OpenAI’s moderation endpoint
-// --------------------------------------------------------------
+// server.js — Social Credit Game (high-render + GPT moderation + direct chat)
+require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+const express = require('express');
+const bodyParser = require('body-parser');
+const http = require('http');
+const { WebSocketServer } = require('ws');
+const OpenAI = require('openai');
 
-import 'dotenv/config';
-import fs from 'fs';
-import path from 'path';
-import express from 'express';
-import bodyParser from 'body-parser';
-import http from 'http';
-import { WebSocketServer } from 'ws';
-import OpenAI from 'openai';
-
-// === Setup ====================================================
 const PORT = process.env.PORT || 8080;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'local_only_pw';
 const OPENAI_KEY = process.env.OPENAI_API_KEY || null;
@@ -23,27 +16,26 @@ const openai = OPENAI_KEY ? new OpenAI({ apiKey: OPENAI_KEY }) : null;
 
 const app = express();
 app.use(bodyParser.json());
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
 
-// --- Admin endpoint (local convenience) ------------------------
+// Admin convenience (local): set key -> writes .env (prefer Render env vars in prod)
 app.post('/admin/set-key', (req, res) => {
-  const { password, key } = req.body;
+  const { password, key } = req.body || {};
   if (password !== ADMIN_PASSWORD) return res.status(403).json({ ok: false, error: 'Forbidden' });
-  fs.writeFileSync('.env', `OPENAI_API_KEY=${key}\nADMIN_PASSWORD=${ADMIN_PASSWORD}\n`);
+  fs.writeFileSync(path.join(__dirname, '.env'), `OPENAI_API_KEY=${key}\nADMIN_PASSWORD=${ADMIN_PASSWORD}\n`, 'utf8');
   res.json({ ok: true, message: 'Saved. Restart server to apply.' });
 });
 
-// --- Serve index.html ------------------------------------------
-app.get('/', (_, res) => res.sendFile(path.join(process.cwd(), 'public/index.html')));
+app.get('/', (_, res) => res.sendFile(path.join(__dirname, 'public/index.html')));
 
-// === WebSocket setup ==========================================
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-const players = new Map();
+// --- State ---
+const players = new Map(); // id -> { id, username, avatar, x, z, credits, ws }
 const npcs = [];
 
-// --- NPC generation --------------------------------------------
+// --- NPCs ---
 function spawnNPCs() {
   const names = ['Anna', 'Bram', 'Kees', 'Fatima', 'Sven', 'Lotte', 'Yara', 'Mehmet'];
   for (let i = 0; i < names.length; i++) {
@@ -52,14 +44,12 @@ function spawnNPCs() {
       name: names[i],
       x: (Math.random() - 0.5) * 30,
       z: (Math.random() - 0.5) * 30,
-      avatar: `avatar_${i % 4}.glb`,
-      nextChat: Date.now() + 60000 + Math.random() * 120000
+      nextChat: Date.now() + 60000 + Math.random() * 120000 // 1–3 minutes
     });
   }
 }
 spawnNPCs();
 
-// --- Broadcast helper ------------------------------------------
 function broadcast(data, exclude = null) {
   const msg = JSON.stringify(data);
   wss.clients.forEach(c => {
@@ -67,7 +57,6 @@ function broadcast(data, exclude = null) {
   });
 }
 
-// --- Moderation ------------------------------------------------
 async function moderate(text) {
   if (!openai) return { flagged: false };
   try {
@@ -75,34 +64,33 @@ async function moderate(text) {
       model: 'omni-moderation-latest',
       input: text
     });
-    return res.results[0];
+    return res.results?.[0] || { flagged: false };
   } catch (e) {
     console.error('Moderation error:', e);
     return { flagged: false };
   }
 }
-const mentionsVrijland = t => /martin\s*v?rijland|m\s*vrijland|vrijland/i.test(t);
+const mentionsVrijland = (t) => /martin\s*v?rijland|m\s*vrijland|vrijland/i.test(t || '');
 
-// --- Connection handler ----------------------------------------
-wss.on('connection', ws => {
+wss.on('connection', (ws) => {
   let pid = null;
 
-  ws.on('message', async raw => {
+  ws.on('message', async (raw) => {
     let data;
     try { data = JSON.parse(raw); } catch { return; }
 
     switch (data.type) {
-      case 'join':
+      case 'join': {
         pid = data.playerId;
         players.set(pid, {
           id: pid,
           username: data.username,
           avatar: data.avatar,
-          x: data.x, z: data.z,
+          x: data.x || 0,
+          z: data.z || 0,
           credits: 1000,
           ws
         });
-        // Send current state
         ws.send(JSON.stringify({
           type: 'init',
           players: Array.from(players.values()).map(p => ({
@@ -112,22 +100,24 @@ wss.on('connection', ws => {
         }));
         broadcast({ type: 'player_joined', player: data }, ws);
         break;
+      }
 
-      case 'move':
+      case 'move': {
         if (!players.has(pid)) break;
         const p = players.get(pid);
         p.x = data.x; p.z = data.z;
         broadcast({ type: 'player_move', playerId: pid, x: data.x, z: data.z }, ws);
         break;
+      }
 
-      case 'chat':
+      case 'chat': {
         if (!players.has(pid)) break;
         const player = players.get(pid);
-        const txt = data.message || '';
+        const text = data.message || '';
         const targetId = data.targetId || null;
 
-        const mod = await moderate(txt);
-        if (mod.flagged && mentionsVrijland(txt)) {
+        const mod = await moderate(text);
+        if (mod.flagged && mentionsVrijland(text)) {
           player.credits -= 500;
           ws.send(JSON.stringify({ type: 'penalty', amount: -500, reason: 'Speaking negatively about Martin Vrijland' }));
         } else if (mod.flagged) {
@@ -135,26 +125,29 @@ wss.on('connection', ws => {
           ws.send(JSON.stringify({ type: 'penalty', amount: -50, reason: 'Inappropriate language' }));
         } else {
           player.credits += 10;
+          ws.send(JSON.stringify({ type: 'penalty', amount: +10, reason: 'Polite communication' }));
         }
 
         const payload = {
           type: 'chat',
           playerId: pid,
           username: player.username,
-          message: txt,
+          message: text,
           private: !!targetId,
           targetId
         };
+
         if (targetId && players.has(targetId)) {
           const target = players.get(targetId);
-          target.ws.send(JSON.stringify(payload));
-          ws.send(JSON.stringify(payload));
+          if (target.ws?.readyState === 1) target.ws.send(JSON.stringify(payload));
+          if (ws?.readyState === 1) ws.send(JSON.stringify(payload));
         } else {
           broadcast(payload);
         }
         break;
+      }
 
-      case 'report':
+      case 'report': {
         const reported = data.reportedId;
         const correct = players.has(reported);
         ws.send(JSON.stringify({
@@ -163,9 +156,10 @@ wss.on('connection', ws => {
           reportedId: reported,
           reportedName: correct
             ? players.get(reported).username
-            : npcs.find(n => n.id === reported)?.name
+            : npcs.find(n => n.id === reported)?.name || 'Unknown'
         }));
         break;
+      }
     }
   });
 
@@ -177,24 +171,22 @@ wss.on('connection', ws => {
   });
 });
 
-// --- NPC loop --------------------------------------------------
+// Slow NPC chat loop
 setInterval(() => {
   const now = Date.now();
   npcs.forEach(n => {
     if (now > n.nextChat) {
-      n.nextChat = now + 60000 + Math.random() * 120000;
+      n.nextChat = now + 60000 + Math.random() * 120000; // 1–3 minutes
       const lines = [
         'Beautiful evening in Amsterdam!',
-        'Have you been by the canal market?',
-        'I love the lights reflecting on the water.',
-        'The credits system keeps things peaceful.',
-        'Let’s grab a virtual stroopwafel.'
+        'The canal lights are stunning.',
+        'Stroopwafels, anyone?',
+        'The system keeps the peace.',
+        'Anyone up for a bridge stroll?'
       ];
       broadcast({ type: 'chat', playerId: n.id, username: n.name, message: lines[Math.floor(Math.random()*lines.length)], isNPC:true });
     }
   });
 }, 5000);
 
-server.listen(PORT, () =>
-  console.log(`Server running at http://localhost:${PORT}`)
-);
+server.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));
