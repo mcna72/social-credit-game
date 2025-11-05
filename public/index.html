@@ -152,6 +152,16 @@
     <div id="actClear">🔓 Zet op Openbaar</div>
   </div>
 
+  <!-- Import map for Three.js modules -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.158.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.158.0/examples/jsm/"
+    }
+  }
+  </script>
+  
   <!-- Your client logic (imports three.js from CDN inside) -->
   <script type="module" src="/app.js"></script>
 </body>
