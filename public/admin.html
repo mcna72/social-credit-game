@@ -1,33 +1,39 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>Admin</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Admin — Social Credit</title>
   <style>
-    body{background:#0b1020;color:#e6fff4;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;margin:0;display:grid;place-items:center;height:100vh}
-    .card{background:#0b0f16;border:1px solid #00ff88;border-radius:12px;padding:20px;max-width:520px;width:92%}
-    input,button{width:100%;padding:10px;border-radius:8px;border:1px solid #333;background:#0a0f18;color:#fff}
-    button{cursor:pointer;margin-top:8px}
-    small{color:#9fd}
+    body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#0b1020;color:#e6fff4;padding:40px}
+    input,button{font-size:16px}
+    .card{max-width:640px;margin:auto;background:#0d1218;border:2px solid #00ff88;border-radius:12px;padding:20px}
+    label{display:block;margin:.6rem 0 .2rem}
+    input{width:100%;padding:10px;border-radius:8px;border:1px solid #333;background:#0a0f18;color:#fff}
+    button{margin-top:12px;padding:10px 16px;border:none;border-radius:8px;background:#00ff88;color:#000;font-weight:700;cursor:pointer}
+    .msg{margin-top:12px}
   </style>
 </head>
 <body>
   <div class="card">
-    <h2>Admin — OpenAI Key</h2>
-    <p><small>Enter admin password and a valid OpenAI API key to use at runtime. This overrides the server's ENV key until restart.</small></p>
-    <input id="pwd" type="password" placeholder="Admin password"/>
-    <input id="key" type="text" placeholder="OpenAI API key (starts with sk-... or sk-proj-...)"/>
+    <h2>Admin</h2>
+    <p>Set/override the OpenAI API key at runtime.</p>
+    <label>Admin password</label>
+    <input id="pwd" type="password" placeholder="ADMIN_PASSWORD"/>
+    <label>OpenAI API key</label>
+    <input id="key" type="text" placeholder="sk-..."/>
     <button id="save">Save</button>
-    <div id="out" style="margin-top:8px;color:#9fd"></div>
+    <div class="msg" id="msg"></div>
   </div>
   <script>
-    save.onclick = async ()=>{
-      const r = await fetch('/admin/set-key',{ method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ password: pwd.value, apiKey: key.value })});
-      const j = await r.json().catch(()=>({}));
-      out.textContent = j.ok ? 'Saved. New key is now active (until server restarts).' : ('Error: '+(j.error||r.status));
-    }
+    document.getElementById('save').onclick = async ()=>{
+      const res = await fetch('/admin/set-key', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ password: document.getElementById('pwd').value, apiKey: document.getElementById('key').value })
+      });
+      const j = await res.json(); document.getElementById('msg').textContent = j.ok ? 'Saved.' : (j.error||'Error');
+    };
   </script>
 </body>
 </html>
