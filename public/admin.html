@@ -1,35 +1,33 @@
-<!doctype html>
+<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8"/>
   <title>Admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
-    body{font-family:Arial;background:#111;color:#ddd;padding:20px}
-    .box{background:#222;padding:16px;border-radius:8px;max-width:600px}
-    input,button{padding:8px;margin-top:8px;width:100%;border-radius:6px;border:1px solid #333;background:#000;color:#fff}
+    body{background:#0b1020;color:#e6fff4;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;margin:0;display:grid;place-items:center;height:100vh}
+    .card{background:#0b0f16;border:1px solid #00ff88;border-radius:12px;padding:20px;max-width:520px;width:92%}
+    input,button{width:100%;padding:10px;border-radius:8px;border:1px solid #333;background:#0a0f18;color:#fff}
+    button{cursor:pointer;margin-top:8px}
+    small{color:#9fd}
   </style>
 </head>
 <body>
-  <div class="box">
-    <h2>Admin – Set OpenAI Key</h2>
-    <p style="color:#888">This writes to <code>.env</code> (local convenience). In production, set env vars on Render.</p>
-    <input id="admin-password" placeholder="Admin password (ADMIN_PASSWORD)"/>
-    <input id="api-key" placeholder="OpenAI API Key (sk-...)"/>
-    <button id="save">Save Key</button>
-    <div id="status" style="margin-top:8px;color:#0f0"></div>
+  <div class="card">
+    <h2>Admin — OpenAI Key</h2>
+    <p><small>Enter admin password and a valid OpenAI API key to use at runtime. This overrides the server's ENV key until restart.</small></p>
+    <input id="pwd" type="password" placeholder="Admin password"/>
+    <input id="key" type="text" placeholder="OpenAI API key (starts with sk-... or sk-proj-...)"/>
+    <button id="save">Save</button>
+    <div id="out" style="margin-top:8px;color:#9fd"></div>
   </div>
   <script>
-    document.getElementById('save').onclick = async () => {
-      const password = document.getElementById('admin-password').value.trim();
-      const key = document.getElementById('api-key').value.trim();
-      if(!password || !key){ alert('Enter both'); return; }
-      try{
-        const res = await fetch('/admin/set-key',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ password, key })});
-        const json = await res.json();
-        if (json.ok) document.getElementById('status').textContent = 'Saved. Restart server to apply.';
-        else document.getElementById('status').textContent = 'Error: ' + (json.error || 'unknown');
-      } catch(e){ document.getElementById('status').textContent = 'Network error'; }
-    };
+    save.onclick = async ()=>{
+      const r = await fetch('/admin/set-key',{ method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ password: pwd.value, apiKey: key.value })});
+      const j = await r.json().catch(()=>({}));
+      out.textContent = j.ok ? 'Saved. New key is now active (until server restarts).' : ('Error: '+(j.error||r.status));
+    }
   </script>
 </body>
 </html>
