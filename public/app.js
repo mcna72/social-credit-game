@@ -1,6 +1,4 @@
-// public/app.js — Enhanced client: city scene with animated water, bikes, weather, minimap,
-// reliable spawns, WASD avatar movement, private chat/report, day/night cycle, stats tracking
-
+// public/app.js — FIXED Enhanced client with better error handling
 const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
 
 const ui = {
@@ -70,7 +68,6 @@ function addLine(user, text, isPrivate = false, isSystem = false) {
   ui.chatlog.appendChild(div);
   ui.chatlog.scrollTop = ui.chatlog.scrollHeight;
   
-  // Limit chat history
   while (ui.chatlog.children.length > 200) {
     ui.chatlog.removeChild(ui.chatlog.firstChild);
   }
@@ -119,7 +116,6 @@ function updateWeather(type, intensity) {
   
   ui.weatherIcon.textContent = icons[type] || '☀️';
   
-  // Update scene fog
   if (state.scene) {
     const fogDensities = {
       fog: 0.012,
@@ -129,8 +125,6 @@ function updateWeather(type, intensity) {
     };
     state.scene.fogDensity = (fogDensities[type] || 0.002) * intensity;
   }
-  
-  console.log(`[Weather] ${type} (${intensity.toFixed(2)})`);
 }
 
 function updateTimeOfDay(gameTime) {
@@ -140,7 +134,6 @@ function updateTimeOfDay(gameTime) {
   const min = Math.floor((gameTime - hour) * 60);
   ui.timeDisplay.textContent = `${hour.toString().padStart(2,'0')}:${min.toString().padStart(2,'0')}`;
   
-  // Update sun lighting
   if (state.scene) {
     const sun = state.scene.getLightByName('sun');
     if (sun) {
@@ -151,29 +144,21 @@ function updateTimeOfDay(gameTime) {
         -0.2
       );
       
-      // Color temperature based on time
       if (gameTime < 6 || gameTime > 20) {
-        // Night
         sun.diffuse = new BABYLON.Color3(0.3, 0.4, 0.6);
         sun.intensity = 0.2;
-        
-        // Enable street lamps
         state.scene.lights.forEach(l => {
           if (l.name.startsWith('L')) l.intensity = 0.8;
         });
       } else if (gameTime < 8 || gameTime > 18) {
-        // Sunrise/Sunset
         sun.diffuse = new BABYLON.Color3(1, 0.7, 0.5);
         sun.intensity = 0.6;
-        
         state.scene.lights.forEach(l => {
           if (l.name.startsWith('L')) l.intensity = 0.4;
         });
       } else {
-        // Daytime
         sun.diffuse = new BABYLON.Color3(1, 0.95, 0.9);
         sun.intensity = 1.25;
-        
         state.scene.lights.forEach(l => {
           if (l.name.startsWith('L')) l.intensity = 0.1;
         });
@@ -192,98 +177,122 @@ const engine = new BABYLON.Engine(canvas, true, {
 state.engine = engine;
 
 const createScene = async () => {
-  const scene = new BABYLON.Scene(engine);
-  state.scene = scene;
-
-  // Image processing
-  const ip = scene.imageProcessingConfiguration;
-  ip.toneMappingEnabled = true;
-  ip.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
-  ip.exposure = 1.2;
-  ip.contrast = 1.1;
-  scene.clearColor = new BABYLON.Color4(0.02, 0.04, 0.10, 1);
-
-  // 3rd-person camera
-  const cam = new BABYLON.ArcRotateCamera('cam',
-    BABYLON.Tools.ToRadians(-35),
-    BABYLON.Tools.ToRadians(55),
-    45, 
-    new BABYLON.Vector3(0, 2, 0), 
-    scene
-  );
-  cam.attachControl(canvas, true);
-  cam.wheelPrecision = 20;
-  cam.panningSensibility = 500;
-  cam.lowerRadiusLimit = 10;
-  cam.upperRadiusLimit = 120;
-  cam.lowerBetaLimit = BABYLON.Tools.ToRadians(15);
-  cam.upperBetaLimit = BABYLON.Tools.ToRadians(89);
-  cam.keysUp = cam.keysDown = cam.keysLeft = cam.keysRight = [];
-  state.camera = cam;
-
-  // Lights
-  const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene);
-  hemi.intensity = 0.5;
-  hemi.groundColor = new BABYLON.Color3(0.3, 0.3, 0.4);
+  console.log('[Scene] Creating...');
   
-  const sun = new BABYLON.DirectionalLight('sun', new BABYLON.Vector3(-0.3, -1, -0.2), scene);
-  sun.position = new BABYLON.Vector3(60, 80, 60);
-  sun.intensity = 1.25;
-  
-  const shadow = new BABYLON.ShadowGenerator(2048, sun);
-  shadow.useExponentialShadowMap = true;
-  shadow.darkness = 0.4;
-  state.shadow = shadow;
+  try {
+    const scene = new BABYLON.Scene(engine);
+    state.scene = scene;
 
-  // Environment & fog
-  scene.environmentTexture = BABYLON.CubeTexture.CreateFromPrefilteredData(
-    'https://assets.babylonjs.com/environments/environmentSpecular.env', 
-    scene
-  );
-  scene.fogMode = BABYLON.Scene.FOGMODE_EXP2;
-  scene.fogDensity = 0.002;
-  scene.fogColor = new BABYLON.Color3(0.02, 0.04, 0.10);
+    // Image processing
+    const ip = scene.imageProcessingConfiguration;
+    ip.toneMappingEnabled = true;
+    ip.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
+    ip.exposure = 1.2;
+    ip.contrast = 1.1;
+    scene.clearColor = new BABYLON.Color4(0.02, 0.04, 0.10, 1);
 
-  // Build city with enhancements
-  await buildCity(scene);
+    // 3rd-person camera
+    const cam = new BABYLON.ArcRotateCamera('cam',
+      BABYLON.Tools.ToRadians(-35),
+      BABYLON.Tools.ToRadians(55),
+      45, 
+      new BABYLON.Vector3(0, 2, 0), 
+      scene
+    );
+    cam.attachControl(canvas, true);
+    cam.wheelPrecision = 20;
+    cam.panningSensibility = 500;
+    cam.lowerRadiusLimit = 10;
+    cam.upperRadiusLimit = 120;
+    cam.lowerBetaLimit = BABYLON.Tools.ToRadians(15);
+    cam.upperBetaLimit = BABYLON.Tools.ToRadians(89);
+    cam.keysUp = cam.keysDown = cam.keysLeft = cam.keysRight = [];
+    state.camera = cam;
 
-  // Post-processing
-  const pipeline = new BABYLON.DefaultRenderingPipeline("pipe", true, scene, [cam]);
-  pipeline.fxaaEnabled = true;
-  pipeline.bloomEnabled = true;
-  pipeline.bloomWeight = 0.22;
-  pipeline.bloomThreshold = 0.8;
-  pipeline.samples = 4;
+    console.log('[Scene] Camera created');
 
-  // Avatar template
-  await loadAvatarTemplate(scene);
-
-  // Setup minimap
-  setupMinimap(scene);
-
-  // Right-click menu
-  setupContextMenu(scene);
-
-  // Input controls
-  setupControls();
-
-  // Render loop
-  let last = performance.now();
-  engine.runRenderLoop(() => {
-    const now = performance.now();
-    const dt = Math.min(0.05, (now - last) / 1000);
-    last = now;
+    // Lights
+    const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene);
+    hemi.intensity = 0.5;
+    hemi.groundColor = new BABYLON.Color3(0.3, 0.3, 0.4);
     
-    tickMovement(dt);
-    interpolateRemotes();
-    updateMinimap();
+    const sun = new BABYLON.DirectionalLight('sun', new BABYLON.Vector3(-0.3, -1, -0.2), scene);
+    sun.position = new BABYLON.Vector3(60, 80, 60);
+    sun.intensity = 1.25;
     
-    scene.render();
-  });
+    const shadow = new BABYLON.ShadowGenerator(2048, sun);
+    shadow.useExponentialShadowMap = true;
+    shadow.darkness = 0.4;
+    state.shadow = shadow;
 
-  window.addEventListener('resize', () => engine.resize());
-  
-  return scene;
+    console.log('[Scene] Lights created');
+
+    // Environment & fog
+    try {
+      scene.environmentTexture = BABYLON.CubeTexture.CreateFromPrefilteredData(
+        'https://assets.babylonjs.com/environments/environmentSpecular.env', 
+        scene
+      );
+    } catch(e) {
+      console.warn('[Scene] Environment texture failed, continuing...', e);
+    }
+    
+    scene.fogMode = BABYLON.Scene.FOGMODE_EXP2;
+    scene.fogDensity = 0.002;
+    scene.fogColor = new BABYLON.Color3(0.02, 0.04, 0.10);
+
+    // Build city
+    buildCity(scene);
+    console.log('[Scene] City built');
+
+    // Post-processing
+    try {
+      const pipeline = new BABYLON.DefaultRenderingPipeline("pipe", true, scene, [cam]);
+      pipeline.fxaaEnabled = true;
+      pipeline.bloomEnabled = true;
+      pipeline.bloomWeight = 0.22;
+      pipeline.bloomThreshold = 0.8;
+      pipeline.samples = 4;
+      console.log('[Scene] Pipeline created');
+    } catch(e) {
+      console.warn('[Scene] Pipeline failed, continuing without...', e);
+    }
+
+    // Avatar template
+    loadAvatarTemplate(scene);
+
+    // Setup minimap
+    setupMinimap(scene);
+
+    // Right-click menu
+    setupContextMenu(scene);
+
+    // Input controls
+    setupControls();
+
+    // Render loop
+    let last = performance.now();
+    engine.runRenderLoop(() => {
+      const now = performance.now();
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      
+      tickMovement(dt);
+      interpolateRemotes();
+      updateMinimap();
+      
+      scene.render();
+    });
+
+    window.addEventListener('resize', () => engine.resize());
+    
+    console.log('[Scene] Complete!');
+    return scene;
+    
+  } catch(e) {
+    console.error('[Scene] CRITICAL ERROR:', e);
+    alert('Failed to create 3D scene. Check console for details.');
+  }
 };
 
 // ---------- City Building ----------
@@ -295,28 +304,27 @@ function pbr(scene, {albedo=[1,1,1], rough=0.9, metal=0} = {}) {
   return m;
 }
 
-async function buildCity(scene) {
-  console.log('[City] Building enhanced Amsterdam...');
-
+function buildCity(scene) {
+  console.log('[City] Building...');
+  
   // Ground
   const ground = BABYLON.MeshBuilder.CreateGround('ground', { 
     width: 600, 
     height: 600,
     subdivisions: 4
   }, scene);
-  ground.material = pbr(scene, { albedo:[0.93, 0.95, 0.97], rough:0.95 });
+  ground.material = pbr(scene, {albedo:[0.93, 0.95, 0.97], rough:0.95});
   ground.receiveShadows = true;
 
   // Materials
-  const asphalt  = pbr(scene, { albedo:[0.12, 0.12, 0.14], rough:0.6,  metal:0.1 });
-  const sidewalk = pbr(scene, { albedo:[0.70, 0.71, 0.74], rough:0.85 });
-  const brick    = pbr(scene, { albedo:[0.78, 0.66, 0.60], rough:0.9 });
-  const poleMat  = pbr(scene, { albedo:[0.2, 0.2, 0.22], rough:0.7,  metal:0.3 });
+  const asphalt = pbr(scene, {albedo:[0.12, 0.12, 0.14], rough:0.6, metal:0.1});
+  const sidewalk = pbr(scene, {albedo:[0.70, 0.71, 0.74], rough:0.85});
+  const brick = pbr(scene, {albedo:[0.78, 0.66, 0.60], rough:0.9});
+  const poleMat = pbr(scene, {albedo:[0.2, 0.2, 0.22], rough:0.7, metal:0.3});
 
   // Roads & sidewalks
   for (let row = -4; row <= 4; row++) {
     const y = 0.03;
-
     const road = BABYLON.MeshBuilder.CreateBox('road' + row, { 
       width: 600, height: 0.06, depth: 16 
     }, scene);
@@ -329,46 +337,50 @@ async function buildCity(scene) {
     }, scene);
     sw1.position.set(0, 0.05, row * 50 + 11);
     sw1.material = sidewalk;
-
+    
     const sw2 = sw1.clone('swB' + row);
     sw2.position.z = row * 50 - 11;
   }
 
-  // Animated canal water
-  // >>> Belangrijk: eerst buiten het if-blok declareren
-  let waterMat = null;
-
-  if (BABYLON.WaterMaterial) {
-    waterMat = new BABYLON.WaterMaterial('water', scene);
-    waterMat.bumpTexture = new BABYLON.Texture(
-      'https://assets.babylonjs.com/textures/waterbump.png', 
-      scene
-    );
-    waterMat.windForce       = -8;
-    waterMat.waveHeight      = 0.2;
-    waterMat.bumpHeight      = 0.08;
-    waterMat.windDirection   = new BABYLON.Vector2(1, 0.5);
-    waterMat.waterColor      = new BABYLON.Color3(0.12, 0.28, 0.38);
-    waterMat.colorBlendFactor= 0.25;
-
-    waterMat.addToRenderList(ground);
-
-    for (let row = -4; row <= 4; row++) {
-      if (row % 2 === 0) {
-        const c1 = BABYLON.MeshBuilder.CreateGround(`canal1_${row}`, { 
-          width: 600, height: 8, subdivisions: 32 
-        }, scene);
-        c1.position.set(0, 0.05, row * 50 + 23);
-        c1.material = waterMat;
-
-        const c2 = c1.clone(`canal2_${row}`);
-        c2.position.z = row * 50 - 23;
-        c2.material   = waterMat;
+  // Canals - with fallback
+  try {
+    if (typeof BABYLON.WaterMaterial !== 'undefined') {
+      console.log('[City] Creating animated water...');
+      const waterMat = new BABYLON.WaterMaterial('water', scene);
+      waterMat.bumpTexture = new BABYLON.Texture(
+        'https://assets.babylonjs.com/textures/waterbump.png', 
+        scene
+      );
+      
+      waterMat.windForce = -8;
+      waterMat.waveHeight = 0.2;
+      waterMat.bumpHeight = 0.08;
+      waterMat.windDirection = new BABYLON.Vector2(1, 0.5);
+      waterMat.waterColor = new BABYLON.Color3(0.12, 0.28, 0.38);
+      waterMat.colorBlendFactor = 0.25;
+      
+      waterMat.addToRenderList(ground);
+      
+      for (let row = -4; row <= 4; row++) {
+        if (row % 2 === 0) {
+          const c1 = BABYLON.MeshBuilder.CreateGround(`canal1_${row}`, { 
+            width: 600, height: 8, subdivisions: 32 
+          }, scene);
+          c1.position.set(0, 0.05, row * 50 + 23);
+          c1.material = waterMat;
+          
+          const c2 = c1.clone(`canal2_${row}`);
+          c2.position.z = row * 50 - 23;
+          c2.material = waterMat;
+        }
       }
+    } else {
+      throw new Error('WaterMaterial not available');
     }
-  } else {
-    // Fallback to simple water
-    const water = pbr(scene, { albedo:[0.15, 0.2, 0.3], rough:0.12, metal:1 });
+  } catch(e) {
+    console.warn('[City] Using fallback water:', e.message);
+    // Fallback simple water
+    const water = pbr(scene, {albedo:[0.15, 0.2, 0.3], rough:0.12, metal:1});
     for (let row = -4; row <= 4; row++) {
       if (row % 2 === 0) {
         const c1 = BABYLON.MeshBuilder.CreateBox('c1' + row, { 
@@ -376,7 +388,7 @@ async function buildCity(scene) {
         }, scene);
         c1.position.set(0, 0.02, row * 50 + 23);
         c1.material = water;
-
+        
         const c2 = c1.clone('c2' + row);
         c2.position.z = row * 50 - 23;
       }
@@ -387,11 +399,11 @@ async function buildCity(scene) {
   for (let x = -5; x <= 5; x++) {
     for (let z = -5; z <= 5; z++) {
       if (Math.abs(x) % 2 === 1 && Math.abs(z) % 2 === 1) continue;
-
+      
       const h = 8 + Math.random() * 18;
       const w = 16 + Math.random() * 8;
       const d = 16 + Math.random() * 8;
-
+      
       const building = BABYLON.MeshBuilder.CreateBox(`b_${x}_${z}`, { 
         width: w, height: h, depth: d 
       }, scene);
@@ -402,13 +414,8 @@ async function buildCity(scene) {
       );
       building.material = brick;
       building.receiveShadows = true;
-
-      if (state.shadow?.addShadowCaster) {
-        state.shadow.addShadowCaster(building);
-      }
-
-      // Alleen als waterMat bestaat, toevoegen aan renderlijst
-      if (waterMat) waterMat.addToRenderList(building);
+      
+      state.shadow.addShadowCaster(building);
     }
   }
 
@@ -417,75 +424,72 @@ async function buildCity(scene) {
     for (let j = -6; j <= 6; j++) {
       const lampNode = new BABYLON.TransformNode('lamp_' + i + '_' + j, scene);
       lampNode.position.set(i * 45, 0, j * 45 + 10);
-
+      
       const pole = BABYLON.MeshBuilder.CreateCylinder('pole', { 
         diameter: 0.25, height: 4 
       }, scene);
       pole.material = poleMat;
       pole.position.y = 2;
       pole.parent = lampNode;
-
+      
       const head = BABYLON.MeshBuilder.CreateBox('head', { 
         width: 0.6, height: 0.3, depth: 0.6 
       }, scene);
       head.material = poleMat;
       head.position.y = 4.1;
       head.parent = lampNode;
-
+      
       const glow = new BABYLON.PointLight('L' + i + '_' + j, new BABYLON.Vector3(0, 4.3, 0), scene);
-      glow.parent   = lampNode;
-      glow.intensity= 0.35;
-      glow.range    = 18;
-      glow.diffuse  = new BABYLON.Color3(1, 0.9, 0.7);
+      glow.parent = lampNode;
+      glow.intensity = 0.35;
+      glow.range = 18;
+      glow.diffuse = new BABYLON.Color3(1, 0.9, 0.7);
     }
   }
 
-  // Add bikes (very Dutch!)
+  // Add bikes
   addBikes(scene);
-
+  
   console.log('[City] Complete!');
 }
 
 function addBikes(scene) {
-  const bikeMat  = pbr(scene, { albedo:[0.15, 0.15, 0.18], metal:0.7, rough:0.5 });
-  const wheelMat = pbr(scene, { albedo:[0.1, 0.1, 0.1],  metal:0.2, rough:0.9 });
-
+  const bikeMat = pbr(scene, {albedo:[0.15, 0.15, 0.18], metal:0.7, rough:0.5});
+  const wheelMat = pbr(scene, {albedo:[0.1, 0.1, 0.1], metal:0.2, rough:0.9});
+  
   for (let i = -5; i <= 5; i++) {
     for (let j = -5; j <= 5; j++) {
       if (Math.random() > 0.35) continue;
-
+      
       const bike = new BABYLON.TransformNode(`bike_${i}_${j}`, scene);
-
-      // Simple frame
+      
       const frame = BABYLON.MeshBuilder.CreateCylinder('frame', {
         height: 0.9, diameter: 0.04
       }, scene);
       frame.rotation.z = Math.PI / 4;
       frame.position.y = 0.45;
-      frame.material   = bikeMat;
-      frame.parent     = bike;
-
-      // Wheels
+      frame.material = bikeMat;
+      frame.parent = bike;
+      
       const wheel1 = BABYLON.MeshBuilder.CreateTorus('wheel', {
         diameter: 0.5, thickness: 0.04
       }, scene);
       wheel1.rotation.x = Math.PI / 2;
-      wheel1.material   = wheelMat;
+      wheel1.material = wheelMat;
       wheel1.position.set(0, 0.25, 0);
-      wheel1.parent     = bike;
-
+      wheel1.parent = bike;
+      
       const wheel2 = wheel1.clone('wheel2');
       wheel2.position.z = 0.7;
-      wheel2.parent     = bike;
-
-      // Position on sidewalk
+      wheel2.parent = bike;
+      
       bike.position.set(
         i * 45 + (Math.random() * 6 - 3),
         0,
         j * 45 + 10 + (Math.random() * 2 - 1)
       );
       bike.rotation.y = Math.random() * Math.PI * 2;
-      bike.scaling    = new BABYLON.Vector3(1.2, 1.2, 1.2);
+      bike.scaling = new BABYLON.Vector3(1.2, 1.2, 1.2);
     }
   }
 }
@@ -495,6 +499,7 @@ async function loadAvatarTemplate(scene) {
   const URL = "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/CesiumMan/glTF-Binary/CesiumMan.glb";
   
   try {
+    console.log('[Avatar] Loading template...');
     const cont = await BABYLON.SceneLoader.LoadAssetContainerAsync(URL, undefined, scene);
     const root = new BABYLON.TransformNode("avatarTemplate", scene);
     
@@ -511,7 +516,7 @@ async function loadAvatarTemplate(scene) {
     state.avatarReady = true;
     console.log('[Avatar] Template loaded');
   } catch(e) {
-    console.warn('[Avatar] Using fallback', e);
+    console.warn('[Avatar] Using fallback capsule', e);
     state.avatarTemplate = null;
     state.avatarReady = true;
   }
@@ -624,6 +629,8 @@ function reallyAddEntity(id, x, z, name, avatar) {
     avatar: avatar || '🙂',
     target: node.position.clone()
   });
+  
+  console.log('[Entity] Added:', name, 'at', x, z);
 }
 
 function removeEntity(id) {
@@ -683,7 +690,6 @@ function setupControls() {
     state.playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
     
     ui.overlay.style.display = 'none';
-    ui.loadingSpinner.style.display = 'block';
     
     connectWS();
   });
@@ -854,6 +860,7 @@ function updateMinimap() {
 
 // ---------- WebSocket ----------
 function connectWS() {
+  console.log('[WS] Connecting...');
   state.ws = new WebSocket(WS_URL);
 
   state.ws.addEventListener('open', () => {
@@ -884,7 +891,7 @@ function connectWS() {
 
     switch(data.type) {
       case 'init': {
-        console.log('[WS] Init received');
+        console.log('[WS] Init received -', data.players.length, 'players,', data.npcs.length, 'NPCs');
         
         // Create all players
         data.players.forEach(p => {
@@ -905,6 +912,7 @@ function connectWS() {
         
         if (state.player) {
           state.camera.target.copyFrom(state.player.node.position);
+          console.log('[WS] Player spawned at', state.player.node.position);
         }
         
         // Weather & time
@@ -915,9 +923,6 @@ function connectWS() {
         
         // Update stats
         ui.statPlayers.textContent = data.players.length;
-        
-        // Hide loading spinner now that init is complete
-        ui.loadingSpinner.style.display = 'none';
         
         break;
       }
@@ -1001,7 +1006,6 @@ function connectWS() {
         break;
 
       case 'position_correction':
-        // Anti-cheat: server corrected our position
         if (state.player) {
           state.player.node.position.x = data.x;
           state.player.node.position.z = data.z;
@@ -1026,6 +1030,10 @@ function connectWS() {
 }
 
 // ---------- Initialize ----------
+console.log('[Game] Starting...');
 createScene().then(() => {
-  console.log('[Game] Scene ready');
+  console.log('[Game] Ready!');
+}).catch(e => {
+  console.error('[Game] Failed to start:', e);
+  alert('Game failed to start. Check browser console (F12) for details.');
 });
