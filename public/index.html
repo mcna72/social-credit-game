@@ -5,18 +5,7 @@
   <title>Social Credit — Amsterdam Enhanced Edition</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
 
-  <!-- Import map so the browser can resolve "three" and "three/addons/*" without a bundler -->
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-    }
-  }
-  </script>
-
-  <!-- Prevent favicon 404 -->
-  <link rel="icon" href="data:,">
+  <!-- GEEN Babylon meer. Three.js wordt in app.js als ES-module geladen -->
 
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
@@ -27,14 +16,19 @@
     #hud{position:fixed;top:16px;left:16px;background:rgba(0,0,0,.75);border:2px solid #00ff88;padding:12px 18px;border-radius:12px;z-index:30;backdrop-filter:blur(10px)}
     #credit{color:#00ff88;font-weight:700;font-size:28px}
     #conn{position:fixed;left:16px;top:80px;background:rgba(0,0,0,.65);border:1px solid #333;border-radius:8px;padding:6px 12px;color:#9fffdc;z-index:30;font-size:13px}
-    
-    /* Weather & Time indicator */
+
+    /* Weather & Time */
     #weatherInfo{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.65);border:1px solid #333;border-radius:8px;padding:8px 16px;z-index:30;display:flex;gap:20px;align-items:center;font-size:14px}
     #weatherIcon{font-size:24px}
-    
+
     /* Minimap */
-    #minimap{position:fixed;top:16px;right:16px;width:200px;height:200px;background:rgba(0,0,0,.8);border:2px solid #00ff88;border-radius:8px;z-index:30}
+    #minimap{position:fixed;top:16px;right:16px;width:220px;height:220px;background:rgba(0,0,0,.8);border:2px solid #00ff88;border-radius:8px;z-index:30}
     #minimapCanvas{width:100%;height:100%;border-radius:6px}
+
+    /* Stats */
+    #statsPanel{position:fixed;top:120px;left:16px;background:rgba(0,0,0,.7);border:1px solid #333;border-radius:8px;padding:10px 14px;z-index:30;font-size:12px;min-width:160px}
+    #statsPanel .stat{display:flex;justify-content:space-between;margin:4px 0;color:#9fd}
+    #statsPanel .stat .value{color:#00ff88;font-weight:600}
 
     /* Chat */
     #chat{position:fixed;left:16px;bottom:16px;width:min(450px, calc(100vw - 32px));z-index:30}
@@ -54,13 +48,13 @@
     #send:active{transform:scale(0.95)}
     #target{font-size:12px;color:#a8ffde;margin-top:6px;padding:0 10px}
 
-    /* Controls tips */
+    /* Tips */
     #tips{position:fixed;right:16px;bottom:16px;background:rgba(0,0,0,.75);border:2px solid #333;border-radius:10px;padding:14px 18px;max-width:360px;z-index:30;backdrop-filter:blur(10px)}
     #tips h4{color:#00ff88;margin-bottom:8px;font-size:16px}
     #tips ul{margin-left:20px;font-size:13px;line-height:1.6}
     #tips li{margin-bottom:4px}
 
-    /* Overlay / Join screen */
+    /* Overlay */
     #overlay{position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.92);z-index:40;backdrop-filter:blur(20px)}
     #card{background:#0d1218;border:3px solid #00ff88;border-radius:16px;padding:30px;max-width:580px;width:94%;box-shadow:0 0 60px rgba(0,255,136,.4)}
     #card h2{color:#00ff88;font-size:32px;margin-bottom:8px}
@@ -78,25 +72,34 @@
     #langLabel{font-size:13px;color:#9fd}
     #lang{padding:6px 10px;border-radius:6px;border:1px solid #333;background:#0a0f18;color:#fff}
 
-    /* Right-click menu */
-    #rightMenu{position:fixed;background:#0d1218;border:2px solid #00ff88;border-radius:10px;padding:8px;display:none;color:#fff;z-index:50;min-width:180px;box-shadow:0 4px 20px rgba(0,0,0,.5)}
+    /* Klik-popup (we gebruiken #rightMenu) */
+    #rightMenu{position:fixed;background:#0d1218;border:2px solid #00ff88;border-radius:10px;padding:8px;display:none;color:#fff;z-index:50;min-width:200px;box-shadow:0 4px 20px rgba(0,0,0,.5)}
     #rightMenu div{padding:10px 14px;cursor:pointer;border-radius:6px;transition:background .15s;font-size:14px}
     #rightMenu div:hover{background:#1a2d3a}
 
-    /* Stats panel */
-    #statsPanel{position:fixed;top:120px;left:16px;background:rgba(0,0,0,.7);border:1px solid #333;border-radius:8px;padding:10px 14px;z-index:30;font-size:12px;min-width:160px}
-    #statsPanel .stat{display:flex;justify-content:space-between;margin:4px 0;color:#9fd}
-    #statsPanel .stat .value{color:#00ff88;font-weight:600}
+    /* Naamlabels (CSS2DRenderer) */
+    .nametag{
+      padding:4px 8px;
+      border-radius:8px;
+      background:rgba(0,0,0,.75);
+      border:1px solid #00ff88;
+      color:#e6fff4;
+      font-weight:700;
+      font-size:12px;
+      white-space:nowrap;
+      transform:translateY(-8px);
+      pointer-events:none;
+      text-shadow:0 0 6px rgba(0,255,136,.4);
+    }
 
-    /* Loading spinner */
+    /* Loader */
     .spinner{border:3px solid rgba(255,255,255,.1);border-top:3px solid #00ff88;border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite;margin:20px auto}
     @keyframes spin{to{transform:rotate(360deg)}}
 
-    /* Mobile adjustments */
     @media (max-width: 768px) {
       #chat{width:calc(100vw - 32px);max-width:none}
       #tips{max-width:calc(100vw - 32px)}
-      #minimap{width:150px;height:150px}
+      #minimap{width:180px;height:180px}
     }
   </style>
 </head>
@@ -104,11 +107,9 @@
   <canvas id="renderCanvas"></canvas>
 
   <!-- HUD -->
-  <div id="hud">
-    Social Credit: <span id="credit">1000</span>
-  </div>
+  <div id="hud">Social Credit: <span id="credit">1000</span></div>
   <div id="conn">Connecting...</div>
-  
+
   <!-- Weather & Time -->
   <div id="weatherInfo">
     <span id="weatherIcon">☀️</span>
@@ -116,9 +117,7 @@
   </div>
 
   <!-- Minimap -->
-  <div id="minimap">
-    <canvas id="minimapCanvas"></canvas>
-  </div>
+  <div id="minimap"><canvas id="minimapCanvas"></canvas></div>
 
   <!-- Stats -->
   <div id="statsPanel">
@@ -141,9 +140,9 @@
   <div id="tips">
     <h4>⌨️ Besturing</h4>
     <ul>
-      <li><b>WASD / Pijlen</b> lopen • <b>Shift</b> sprint</li>
+      <li><b>WASD</b> lopen • <b>Shift</b> sprint</li>
       <li><b>Muis</b> camera rotatie & zoom</li>
-      <li><b>Rechtsklik avatar</b> menu (chat/rapporteren)</li>
+      <li><b>Klik avatar</b> menu (privé chat/rapporteren)</li>
       <li><b>+10</b> beleefd • <b>−50</b> ongepast • <b>−500</b> doelgerichte belediging</li>
     </ul>
   </div>
@@ -157,7 +156,7 @@
       <div id="avatars"></div>
       <div id="startRow">
         <button id="start" disabled>Systeem betreden</button>
-        <label id="langLabel">Taal: 
+        <label id="langLabel">Taal:
           <select id="lang">
             <option value="nl">🇳🇱 Nederlands</option>
             <option value="en">🇬🇧 English</option>
@@ -170,14 +169,13 @@
     </div>
   </div>
 
-  <!-- Right-click context menu -->
+  <!-- Klik-popup -->
   <div id="rightMenu">
-    <div id="actChat">💬 Chat met</div>
+    <div id="actChat">💬 Privé chat</div>
     <div id="actReport">⚠️ Rapporteer</div>
-    <div id="actClear">🔓 Zet op Openbaar</div>
   </div>
 
-  <!-- Your Three.js client -->
+  <!-- ES-module client -->
   <script type="module" src="/app.js"></script>
 </body>
 </html>
