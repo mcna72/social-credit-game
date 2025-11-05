@@ -1,16 +1,16 @@
 {
-  "name": "social-credit-amsterdam",
-  "version": "1.0.0",
-  "description": "High-render Social Credit Simulation – Amsterdam Edition",
+  "name": "social-credit-game",
+  "version": "2.0.0",
+  "description": "High-render Social Credit Simulation with GPT moderation and direct chat",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "ws": "^8.18.0",
-    "express": "^4.19.0",
+    "body-parser": "^1.20.2",
     "dotenv": "^16.4.0",
+    "express": "^4.19.0",
     "openai": "^4.14.2",
-    "body-parser": "^1.20.2"
+    "ws": "^8.18.0"
   }
 }
