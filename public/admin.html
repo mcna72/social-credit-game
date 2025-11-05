@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Admin</title>
+  <style>
+    body{font-family:Arial;background:#111;color:#ddd;padding:20px}
+    .box{background:#222;padding:16px;border-radius:8px;max-width:600px}
+    input,button{padding:8px;margin-top:8px;width:100%;border-radius:6px;border:1px solid #333;background:#000;color:#fff}
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>Admin – Set OpenAI Key</h2>
+    <p style="color:#888">This writes to <code>.env</code> (local convenience). In production, set env vars on Render.</p>
+    <input id="admin-password" placeholder="Admin password (ADMIN_PASSWORD)"/>
+    <input id="api-key" placeholder="OpenAI API Key (sk-...)"/>
+    <button id="save">Save Key</button>
+    <div id="status" style="margin-top:8px;color:#0f0"></div>
+  </div>
+  <script>
+    document.getElementById('save').onclick = async () => {
+      const password = document.getElementById('admin-password').value.trim();
+      const key = document.getElementById('api-key').value.trim();
+      if(!password || !key){ alert('Enter both'); return; }
+      try{
+        const res = await fetch('/admin/set-key',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ password, key })});
+        const json = await res.json();
+        if (json.ok) document.getElementById('status').textContent = 'Saved. Restart server to apply.';
+        else document.getElementById('status').textContent = 'Error: ' + (json.error || 'unknown');
+      } catch(e){ document.getElementById('status').textContent = 'Network error'; }
+    };
+  </script>
+</body>
+</html>
