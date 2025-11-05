@@ -78,31 +78,27 @@
     <div id="actClear">Set Public</div>
   </div>
 
+  <!-- Three.js + postprocessing from CDN -->
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.155.0/build/three.module.js';
     import { OrbitControls } from 'https://unpkg.com/three@0.155.0/examples/jsm/controls/OrbitControls.js';
-    import { GLTFLoader } from 'https://unpkg.com/three@0.155.0/examples/jsm/loaders/GLTFLoader.js';
     import { RGBELoader } from 'https://unpkg.com/three@0.155.0/examples/jsm/loaders/RGBELoader.js';
     import { EffectComposer } from 'https://unpkg.com/three@0.155.0/examples/jsm/postprocessing/EffectComposer.js';
     import { RenderPass } from 'https://unpkg.com/three@0.155.0/examples/jsm/postprocessing/RenderPass.js';
     import { UnrealBloomPass } from 'https://unpkg.com/three@0.155.0/examples/jsm/postprocessing/UnrealBloomPass.js';
     import { SSAOPass } from 'https://unpkg.com/three@0.155.0/examples/jsm/postprocessing/SSAOPass.js';
 
-    // ---------- Asset URLs (swap for your own later) ----------
-    const ASSETS = {
-      HDRI: 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/venice_sunset_1k.hdr', // CC0
-      AVATAR: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/RobotExpressive/RobotExpressive.glb' // placeholder avatar
-      // City placeholder will be built procedurally (canal + bridges); replace with your GLB if desired
-    };
+    // --- Assets (HDRI only; scene is procedural) ---
+    const HDRI = 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/venice_sunset_1k.hdr';
 
-    // ---------- Multilingual ----------
+    // --- Multilingual ---
     const L = {
       en: { title:'Social Credit — Amsterdam Edition', subtitle:'Join the network — Choose your identity', enter:'Enter System', public:'Public', connecting:'Connecting…' },
       nl: { title:'Sociale Krediet — Amsterdam Editie', subtitle:'Sluit je aan — Kies je identiteit', enter:'Systeem Betreden', public:'Openbaar', connecting:'Verbinding maken…' },
       de: { title:'Sozialkredit — Amsterdam Edition', subtitle:'Netzwerk beitreten — Identität wählen', enter:'System Betreten', public:'Öffentlich', connecting:'Verbindung wird hergestellt…' }
     };
 
-    // ---------- UI state ----------
+    // --- UI refs ---
     const ui = {
       title: document.getElementById('title'),
       subtitle: document.getElementById('subtitle'),
@@ -123,7 +119,7 @@
       mClear: document.getElementById('actClear')
     };
 
-    // ---------- Game state ----------
+    // --- Game state ---
     const state = {
       lang: (navigator.language||'en').slice(0,2),
       ws: null,
@@ -131,12 +127,12 @@
       username: '',
       avatarEmoji: null,
       targetId: null,
-      entities: new Map(), // id -> { mesh, name }
+      entities: new Map(),
       player: null,
       credits: 1000
     };
 
-    // ---------- Setup UI ----------
+    // --- UI setup ---
     const emojis = ['👨','👩','🧑','👴','👵','👦','👧','🧔','👱‍♀️','👱‍♂️','🧕','👳'];
     emojis.forEach(e => {
       const d = document.createElement('div');
@@ -167,7 +163,7 @@
     ui.msg.addEventListener('keydown', e => { if (e.key==='Enter') ui.sendBtn.click(); });
     function updateStart(){ ui.startBtn.disabled = !ui.nameInput.value.trim() || !state.avatarEmoji; }
 
-    // ---------- Three.js ----------
+    // --- Three.js setup ---
     const canvas = document.getElementById('c');
     const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
     renderer.setSize(innerWidth, innerHeight);
@@ -187,41 +183,38 @@
 
     // Post-processing
     const composer = new EffectComposer(renderer);
-    const rp = new RenderPass(scene, camera); composer.addPass(rp);
-    const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.9, 0.6, 0.85); composer.addPass(bloom);
-    const ssao = new SSAOPass(scene, camera, innerWidth, innerHeight); ssao.kernelRadius = 16; composer.addPass(ssao);
+    composer.addPass(new RenderPass(scene, camera));
+    const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.9, 0.6, 0.85);
+    composer.addPass(bloom);
+    const ssao = new SSAOPass(scene, camera, innerWidth, innerHeight);
+    ssao.kernelRadius = 16; composer.addPass(ssao);
     window.addEventListener('resize', () => {
       camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
       renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight);
       bloom.setSize(innerWidth, innerHeight); ssao.setSize(innerWidth, innerHeight);
     });
 
-    // HDRI env
+    // HDRI env (fall back to solid color if blocked)
     const pmrem = new THREE.PMREMGenerator(renderer);
     try {
-      new RGBELoader().load(ASSETS.HDRI, (tex) => {
+      new RGBELoader().load(HDRI, (tex) => {
         const env = pmrem.fromEquirectangular(tex).texture;
-        scene.environment = env;
-        scene.background = env;
-        tex.dispose();
+        scene.environment = env; scene.background = env; tex.dispose();
       }, undefined, () => { scene.background = new THREE.Color(0x0b1020); });
     } catch { scene.background = new THREE.Color(0x0b1020); }
 
-    // Procedural Amsterdam-ish canal + bridges (swap with a GLB city later if you like)
+    // Simple Amsterdam-ish canal scene
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(140,140), new THREE.MeshStandardMaterial({ color:0x1a2336, roughness:.9, metalness:.1 }));
     ground.rotation.x = -Math.PI/2; ground.receiveShadow = true; scene.add(ground);
-
     const canal = new THREE.Mesh(new THREE.BoxGeometry(100, 0.2, 10), new THREE.MeshStandardMaterial({ color:0x0b2a3a, metalness:0.85, roughness:0.2, envMapIntensity:2 }));
     canal.position.set(0, 0.01, 0); canal.receiveShadow = true; scene.add(canal);
-
     for (let i= -3; i<=3; i++) {
       const b = new THREE.Mesh(new THREE.BoxGeometry(3,0.7,16), new THREE.MeshStandardMaterial({ color:0x3a2a1a, roughness:.85 }));
       b.position.set(i*16, 0.36, 0); b.castShadow = true; scene.add(b);
     }
 
-    // ---------- Entities ----------
-    const raycaster = new THREE.Raycaster();
-    const mouse = new THREE.Vector2();
+    // --- Entities & labels ---
+    const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
 
     function makeLabel(text) {
       const c = document.createElement('canvas'); c.width=256; c.height=64;
@@ -257,14 +250,15 @@
       state.entities.set(id, { mesh: ent, name: name || id });
     }
 
-    // Right-click context menu for private chat/report
+    // Context menu for private chat/report
+    const menu = document.getElementById('rightMenu');
     renderer.domElement.addEventListener('contextmenu', (ev) => {
       ev.preventDefault();
       const rect = renderer.domElement.getBoundingClientRect();
       mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(mouse, camera);
-      const hits = raycaster.intersectObjects(scene.children, true);
+      ray.setFromCamera(mouse, camera);
+      const hits = ray.intersectObjects(scene.children, true);
       let clickedId = null;
       for (const h of hits) {
         for (const [id, ent] of state.entities) {
@@ -272,35 +266,31 @@
         }
         if (clickedId) break;
       }
-      const menu = ui.rightMenu;
       menu.style.left = ev.clientX + 'px';
       menu.style.top = ev.clientY + 'px';
       menu.style.display = 'block';
 
       if (clickedId) {
         const ent = state.entities.get(clickedId);
-        ui.mChat.textContent = 'Chat with ' + ent.name;
-        ui.mReport.textContent = 'Report ' + ent.name;
+        document.getElementById('actChat').textContent = 'Chat with ' + ent.name;
+        document.getElementById('actReport').textContent = 'Report ' + ent.name;
 
-        ui.mChat.onclick = () => { state.targetId = clickedId; ui.targetName.textContent = ent.name; menu.style.display='none'; };
-        ui.mReport.onclick = () => {
-          if (state.ws?.readyState === WebSocket.OPEN) {
-            state.ws.send(JSON.stringify({ type:'report', reportedId: clickedId }));
-          }
+        document.getElementById('actChat').onclick = () => { state.targetId = clickedId; ui.targetName.textContent = ent.name; menu.style.display='none'; };
+        document.getElementById('actReport').onclick = () => {
+          if (state.ws?.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type:'report', reportedId: clickedId }));
           menu.style.display='none';
         };
       } else {
-        ui.mChat.textContent = 'No avatar here';
-        ui.mReport.textContent = '—';
-        ui.mChat.onclick = () => { menu.style.display='none'; };
-        ui.mReport.onclick = () => { menu.style.display='none'; };
+        document.getElementById('actChat').textContent = 'No avatar here';
+        document.getElementById('actReport').textContent = '—';
+        document.getElementById('actChat').onclick = () => { menu.style.display='none'; };
+        document.getElementById('actReport').onclick = () => { menu.style.display='none'; };
       }
-      ui.mClear.onclick = () => { state.targetId = null; ui.targetName.textContent = (L[state.lang]||L.en).public; menu.style.display='none'; };
-
+      document.getElementById('actClear').onclick = () => { state.targetId = null; ui.targetName.textContent = (L[state.lang]||L.en).public; menu.style.display='none'; };
       window.addEventListener('click', () => { menu.style.display='none'; }, { once:true });
     });
 
-    // ---------- Player + movement ----------
+    // Movement
     const keys = {};
     window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
     window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
@@ -322,12 +312,10 @@
       state.player.position.x = Math.max(-60, Math.min(60, state.player.position.x));
       state.player.position.z = Math.max(-60, Math.min(60, state.player.position.z));
 
-      // camera follow
       camera.position.x = state.player.position.x;
       camera.position.z = state.player.position.z + 12;
       camera.lookAt(state.player.position);
 
-      // throttle WS move
       if (state.ws?.readyState === WebSocket.OPEN) {
         if (!updatePlayer.last || Date.now() - updatePlayer.last > 100) {
           updatePlayer.last = Date.now();
@@ -336,7 +324,7 @@
       }
     }
 
-    // ---------- Chat ----------
+    // Chat UI
     function addLine(user, text, opt={}) {
       const div = document.createElement('div');
       div.className = 'line' + (opt.private ? ' priv' : '');
@@ -346,7 +334,6 @@
       while (ui.chatlog.children.length > 200) ui.chatlog.removeChild(ui.chatlog.firstChild);
     }
     function escapeHtml(s){ return s.replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }
-
     function sendMessage(text) {
       const payload = { type:'chat', message:text };
       if (state.targetId) payload.targetId = state.targetId;
@@ -354,22 +341,20 @@
       addLine(state.username + (state.targetId ? ' (to ' + (state.entities.get(state.targetId)?.name||'') + ')' : ':'), text, { private: !!state.targetId });
     }
 
-    // ---------- Networking ----------
+    // ---- START GAME / WS ----
     function startGame() {
       state.username = ui.nameInput.value.trim();
       state.playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
-
       ui.overlay.style.display = 'none';
-
       spawnPlayer();
       connectWS();
       animate();
     }
 
     function connectWS() {
-      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = `${proto}//${location.host}`;
-      state.ws = new WebSocket(url);
+      // 🔴 THIS is the important bit for Render:
+      const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
+      state.ws = new WebSocket(wsUrl);
 
       state.ws.addEventListener('open', () => {
         ui.conn.textContent = 'Connected';
@@ -405,8 +390,6 @@
               e.position.x = data.x; e.position.z = data.z;
             }
             break;
-          case 'npc_update': // (reserved; not used in this version)
-            break;
           case 'chat':
             if (data.private) {
               const meIsSender = data.playerId === state.playerId;
@@ -430,29 +413,16 @@
 
       state.ws.addEventListener('close', () => {
         ui.conn.textContent = (L[state.lang]||L.en).connecting;
-        setTimeout(connectWS, 1500);
+        setTimeout(connectWS, 2000);
       });
     }
 
-    // ---------- Loop ----------
-    function animate(){
-      requestAnimationFrame(animate);
-      updatePlayer();
-      state.entities.forEach(ent => {
-        const label = ent.mesh.children[2];
-        if (label) label.lookAt(camera.position);
-      });
-      // composer for postproc
-      composer.render();
-    }
+    // Loop
+    function animate(){ requestAnimationFrame(animate); updatePlayer(); state.entities.forEach(ent => { const label = ent.mesh.children[2]; if (label) label.lookAt(camera.position); }); composer.render(); }
 
-    // ---------- Wire up start + initial UI ----------
+    // Hook up start
     ui.startBtn.disabled = true;
     ui.startBtn.addEventListener('click', startGame);
-
-    function updateStart(){ ui.startBtn.disabled = !ui.nameInput.value.trim() || !state.avatarEmoji; }
-
-    // Done
   </script>
 </body>
 </html>
