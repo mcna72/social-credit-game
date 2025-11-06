@@ -860,6 +860,9 @@ class WorldGenerator {
 // ═══════════════════════════════════════════════════════════════════════════
 
 class EntityManager {
+  // Initialize the entities Map immediately when class is defined
+  static entities = state.entities;
+  
   static async createAvatar(scene, shadowGenerator, isNPC = false) {
     const avatar = BABYLON.MeshBuilder.CreateCapsule("avatar", {
       radius: CONFIG.PLAYER_RADIUS,
@@ -918,35 +921,56 @@ class EntityManager {
   }
 
   static addEntity(id, name, x, z, isNPC, scene, shadowGenerator) {
-    if (state.entities.has(id)) return state.entities.get(id);
+    // Safety check: ensure state.entities exists
+    if (!state.entities) {
+      console.error('❌ Cannot add entity - state.entities not initialized!');
+      return null;
+    }
     
-    const node = this.createAvatar(scene, shadowGenerator, isNPC);
-    node.position.set(x, CONFIG.PLAYER_HEIGHT / 2, z);
+    if (state.entities.has(id)) {
+      console.log('Entity already exists:', id);
+      return state.entities.get(id);
+    }
     
-    const nametag = this.createNameTag(name, scene);
-    nametag.parent = node;
+    // Safety check: ensure scene exists
+    if (!scene) {
+      console.error('❌ Cannot add entity - scene not initialized!');
+      return null;
+    }
     
-    // Apply spawn collision check
-    const safePos = CollisionSystem.solveCollisions(x, z);
-    node.position.x = safePos.x;
-    node.position.z = safePos.z;
-    
-    const entity = {
-      id,
-      name,
-      node,
-      nametag,
-      target: node.position.clone(),
-      isNPC,
-      lastUpdate: Date.now()
-    };
-    
-    state.entities.set(id, entity);
-    
-    // Spawn effect
-    VisualEffects.createTeleportEffect(node.position, scene);
-    
-    return entity;
+    try {
+      const node = this.createAvatar(scene, shadowGenerator, isNPC);
+      node.position.set(x, CONFIG.PLAYER_HEIGHT / 2, z);
+      
+      const nametag = this.createNameTag(name, scene);
+      nametag.parent = node;
+      
+      // Apply spawn collision check
+      const safePos = CollisionSystem.solveCollisions(x, z);
+      node.position.x = safePos.x;
+      node.position.z = safePos.z;
+      
+      const entity = {
+        id,
+        name,
+        node,
+        nametag,
+        target: node.position.clone(),
+        isNPC,
+        lastUpdate: Date.now()
+      };
+      
+      state.entities.set(id, entity);
+      console.log('✅ Entity added:', name, id);
+      
+      // Spawn effect
+      VisualEffects.createTeleportEffect(node.position, scene);
+      
+      return entity;
+    } catch (err) {
+      console.error('❌ Error adding entity:', err);
+      return null;
+    }
   }
 
   static removeEntity(id) {
@@ -1122,10 +1146,14 @@ class InputManager {
 // ═══════════════════════════════════════════════════════════════════════════
 
 class NetworkManager {
+  static messageQueue = [];
+  static isReady = false;
+  
   static connect() {
     state.ws = new WebSocket(CONFIG.SERVER_URL);
     
     state.ws.onopen = () => {
+      console.log('✅ WebSocket connected');
       UIManager.showNotification('Verbonden met server!', 'success');
       this.sendJoin();
     };
@@ -1133,6 +1161,14 @@ class NetworkManager {
     state.ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
+        
+        // Queue messages until scene is ready
+        if (!this.isReady) {
+          console.log('📬 Queuing message:', msg.type);
+          this.messageQueue.push(msg);
+          return;
+        }
+        
         this.handleMessage(msg);
       } catch (err) {
         console.error('Failed to parse message:', err);
@@ -1145,9 +1181,22 @@ class NetworkManager {
     };
     
     state.ws.onclose = () => {
+      console.log('WebSocket closed');
       UIManager.showNotification('Verbinding verbroken', 'warning');
       setTimeout(() => this.connect(), 3000);
     };
+  }
+  
+  static setReady() {
+    console.log('✅ Game ready, processing queued messages:', this.messageQueue.length);
+    this.isReady = true;
+    
+    // Process all queued messages
+    while (this.messageQueue.length > 0) {
+      const msg = this.messageQueue.shift();
+      console.log('📨 Processing queued message:', msg.type);
+      this.handleMessage(msg);
+    }
   }
 
   static sendJoin() {
@@ -1240,6 +1289,13 @@ class NetworkManager {
   }
 
   static handleInit(msg) {
+    console.log('📥 Handling init message:', msg);
+    
+    if (!state.scene) {
+      console.error('❌ Scene not ready for init!');
+      return;
+    }
+    
     state.myId = msg.id;
     
     // Create local player
@@ -1252,6 +1308,11 @@ class NetworkManager {
       state.scene,
       state.shadowGenerator
     );
+    
+    if (!state.player) {
+      console.error('❌ Failed to create player!');
+      return;
+    }
     
     // Add other players
     if (msg.players) {
@@ -1270,6 +1331,7 @@ class NetworkManager {
     }
     
     UIManager.updateScore(msg.score || 0);
+    console.log('✅ Init complete - Player:', state.player.name);
   }
 
   static handlePlayerJoined(msg) {
@@ -1434,6 +1496,9 @@ async function initGame() {
   
   // Connect to server
   NetworkManager.connect();
+  
+  // Mark as ready to process messages AFTER scene is set up
+  NetworkManager.setReady();
   
   // Render loop
   let lastTime = Date.now();
