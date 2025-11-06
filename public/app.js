@@ -10,7 +10,6 @@ const CONFIG = {
   PLAYER_HEIGHT: 1.75,
   MOVE_SPEED: 4.0,
   SPRINT_SPEED: 7.0,
-  CAMERA_OFFSET: new BABYLON.Vector3(0, 2.5, -5),
   COLLISION_ITERATIONS: 3,
   MAX_RENDER_DISTANCE: 100,
   LOD_DISTANCE_HIGH: 30,
@@ -1197,6 +1196,11 @@ class NetworkManager {
   }
 
   static handleMessage(msg) {
+    if (!msg || !msg.type) {
+      console.warn('Invalid message received:', msg);
+      return;
+    }
+    
     switch (msg.type) {
       case 'init':
         this.handleInit(msg);
@@ -1224,6 +1228,13 @@ class NetworkManager {
         break;
       case 'stats':
         this.handleStats(msg);
+        break;
+      case 'weather_update':
+        // Optional: handle weather updates if needed
+        console.log('Weather update:', msg.weather, msg.time);
+        break;
+      default:
+        console.warn('Unknown message type:', msg.type, msg);
         break;
     }
   }
@@ -1262,12 +1273,20 @@ class NetworkManager {
   }
 
   static handlePlayerJoined(msg) {
+    if (!msg.id || !msg.name || msg.x === undefined || msg.z === undefined) {
+      console.error('Invalid player_joined message:', msg);
+      return;
+    }
     EntityManager.addEntity(msg.id, msg.name, msg.x, msg.z, false, state.scene, state.shadowGenerator);
     UIManager.addChatMessage(`${msg.name} heeft het spel betreden`, false, true);
     UIManager.showNotification(`${msg.name} heeft het spel betreden`, 'info');
   }
 
   static handlePlayerLeft(msg) {
+    if (!msg.id) {
+      console.error('Invalid player_left message:', msg);
+      return;
+    }
     const entity = state.entities.get(msg.id);
     if (entity) {
       UIManager.addChatMessage(`${entity.name} heeft het spel verlaten`, false, true);
@@ -1276,8 +1295,12 @@ class NetworkManager {
   }
 
   static handlePlayerMove(msg) {
+    if (!msg.id || msg.x === undefined || msg.z === undefined) {
+      console.error('Invalid player_move message:', msg);
+      return;
+    }
     const entity = state.entities.get(msg.id);
-    if (entity && entity.id !== state.myId) {
+    if (entity && entity.id !== state.myId && entity.target) {
       // Apply collision correction to remote position
       const fixed = CollisionSystem.solveCollisions(msg.x, msg.z);
       entity.target.set(fixed.x, CONFIG.PLAYER_HEIGHT / 2, fixed.z);
@@ -1286,8 +1309,12 @@ class NetworkManager {
   }
 
   static handleNPCUpdate(msg) {
+    if (!msg.id || msg.x === undefined || msg.z === undefined) {
+      console.error('Invalid npc_update message:', msg);
+      return;
+    }
     const entity = state.entities.get(msg.id);
-    if (entity) {
+    if (entity && entity.target) {
       // Apply collision correction
       const fixed = CollisionSystem.solveCollisions(msg.x, msg.z);
       entity.target.set(fixed.x, CONFIG.PLAYER_HEIGHT / 2, fixed.z);
