@@ -140,10 +140,12 @@ class CollisionSystem {
     return { x, z };
   }
 
-  static solveCollisions(nextX, nextZ) {
+  static solveCollisions(nextX, nextZ, maxIterations = null) {
+    // Use more iterations for initial spawn positions
+    const iterations = maxIterations || CONFIG.COLLISION_ITERATIONS;
     let p = this.keepInsideBounds(nextX, nextZ, CONFIG.PLAYER_RADIUS, colliders.mazeBounds);
 
-    for (let pass = 0; pass < CONFIG.COLLISION_ITERATIONS; pass++) {
+    for (let pass = 0; pass < iterations; pass++) {
       const nearbyWalls = this.getSpatialGridWalls(p.x, p.z);
       
       for (const box of nearbyWalls) {
@@ -346,9 +348,11 @@ class UIManager {
         .hud-bottom {
           position: absolute;
           bottom: 20px;
-          left: 50%;
-          transform: translateX(-50%);
-          min-width: 400px;
+          right: 20px;
+          width: 400px;
+          max-width: 90vw;
+          resize: both;
+          overflow: hidden;
         }
         
         .score-display {
@@ -377,8 +381,11 @@ class UIManager {
         }
         
         .chat-container {
-          max-height: 300px;
+          max-height: 200px;
+          min-height: 100px;
+          height: 200px;
           overflow-y: auto;
+          overflow-x: hidden;
           margin-bottom: 10px;
         }
         
@@ -974,9 +981,9 @@ class EntityManager {
       const nametag = this.createNameTag(name, scene);
       nametag.parent = node;
       
-      // Apply spawn collision check
+      // Apply spawn collision check with extra iterations
       console.log('🔒 Applying collision check');
-      const safePos = CollisionSystem.solveCollisions(x, z);
+      const safePos = CollisionSystem.solveCollisions(x, z, 10); // Use 10 iterations for spawns
       node.position.x = safePos.x;
       node.position.z = safePos.z;
       
@@ -1051,6 +1058,11 @@ class InputManager {
   static setupInput(canvas) {
     // Keyboard
     window.addEventListener('keydown', (e) => {
+      // Don't process movement keys if chat input is focused
+      if (document.activeElement === ui.chatInput) {
+        return;
+      }
+      
       const key = e.key.toLowerCase();
       if (key === 'w' || key === 'arrowup') state.inputState.w = true;
       if (key === 'a' || key === 'arrowleft') state.inputState.a = true;
@@ -1060,6 +1072,11 @@ class InputManager {
     });
     
     window.addEventListener('keyup', (e) => {
+      // Don't process movement keys if chat input is focused
+      if (document.activeElement === ui.chatInput) {
+        return;
+      }
+      
       const key = e.key.toLowerCase();
       if (key === 'w' || key === 'arrowup') state.inputState.w = false;
       if (key === 'a' || key === 'arrowleft') state.inputState.a = false;
@@ -1481,12 +1498,17 @@ async function initGame() {
   canvas.style.cssText = 'width: 100%; height: 100%; position: fixed; top: 0; left: 0; z-index: 1;';
   document.body.insertBefore(canvas, document.body.firstChild);
   
-  // Create engine
+  // Create engine with high quality settings
   state.engine = new BABYLON.Engine(canvas, true, {
     preserveDrawingBuffer: true,
     stencil: true,
-    disableWebGL2Support: false
+    disableWebGL2Support: false,
+    antialias: true,
+    powerPreference: "high-performance"
   });
+  
+  // Set hardware scaling to 1 for sharp rendering
+  state.engine.setHardwareScalingLevel(1 / window.devicePixelRatio);
   
   // Create scene
   state.scene = WorldGenerator.createEnhancedScene(state.engine, canvas);
