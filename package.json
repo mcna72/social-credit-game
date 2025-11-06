@@ -1,15 +1,45 @@
 {
-  "name": "social-credit-game",
+  "name": "social-credit-game-enhanced",
   "version": "2.0.0",
-  "private": true,
-  "type": "module",
-  "engines": { "node": ">=18.0.0" },
+  "description": "Ultra-enhanced multiplayer 3D social credit simulation game with Babylon.js, advanced collision system, PBR graphics, and GPT-4 powered NPCs",
+  "main": "server-ENHANCED.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server-ENHANCED.js",
+    "dev": "nodemon server-ENHANCED.js",
+    "test": "echo \"No tests configured\" && exit 0"
+  },
+  "keywords": [
+    "game",
+    "multiplayer",
+    "babylon.js",
+    "3d",
+    "social-credit",
+    "websocket",
+    "nodejs",
+    "openai",
+    "npc",
+    "ai",
+    "simulation"
+  ],
+  "author": "Martin Vrijland (Enhanced by Claude/Anthropic)",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "openai": "^4.55.0",
-    "ws": "^8.18.0"
-  }
+    "express": "^4.18.2",
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mcna72/social-credit-game.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mcna72/social-credit-game/issues"
+  },
+  "homepage": "https://github.com/mcna72/social-credit-game#readme"
 }
