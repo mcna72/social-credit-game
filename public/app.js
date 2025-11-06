@@ -1,754 +1,1445 @@
-// public/app.js — Three.js client with labels, collisions, proximity chat, right-click popup
-// Loads Three.js as ES modules from CDN (no bundler required).
+// ═══════════════════════════════════════════════════════════════════════════
+// SOCIAL CREDIT GAME - ULTRA ENHANCED VERSION
+// Professional multiplayer 3D game with Babylon.js
+// Enhanced beyond ChatGPT suggestions with production-ready features
+// ═══════════════════════════════════════════════════════════════════════════
 
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-
-// ------------------------------
-// UI references (no avatar picker)
-// ------------------------------
-const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
-
-const ui = {
-  overlay: document.getElementById('overlay'),
-  startBtn: document.getElementById('start'),
-  nameInput: document.getElementById('name'),
-  langSel: document.getElementById('lang'),
-  credit: document.getElementById('credit'),
-  conn: document.getElementById('conn'),
-  chatlog: document.getElementById('chatlog'),
-  msg: document.getElementById('msg'),
-  sendBtn: document.getElementById('send'),
-  targetName: document.getElementById('targetName'),
-  rightMenu: document.getElementById('rightMenu'),
-  mChat: document.getElementById('actChat'),
-  mReport: document.getElementById('actReport'),
-  mClear: document.getElementById('actClear'),
-  weatherIcon: document.getElementById('weatherIcon'),
-  timeDisplay: document.getElementById('timeDisplay'),
-  minimapCanvas: document.getElementById('minimapCanvas'),
-  statReports: document.getElementById('statReports'),
-  statAccuracy: document.getElementById('statAccuracy'),
-  statPlayers: document.getElementById('statPlayers'),
-  loadingSpinner: document.getElementById('loadingSpinner'),
-  threeRoot: document.getElementById('threeRoot'),
+const CONFIG = {
+  SERVER_URL: window.location.origin.replace(/^http/, 'ws'),
+  PLAYER_RADIUS: 0.45,
+  PLAYER_HEIGHT: 1.75,
+  MOVE_SPEED: 4.0,
+  SPRINT_SPEED: 7.0,
+  CAMERA_OFFSET: new BABYLON.Vector3(0, 2.5, -5),
+  COLLISION_ITERATIONS: 3,
+  MAX_RENDER_DISTANCE: 100,
+  LOD_DISTANCE_HIGH: 30,
+  LOD_DISTANCE_MED: 60,
 };
 
-// ------------------------------
-// Global state
-// ------------------------------
+// ═══════════════════════════════════════════════════════════════════════════
+// STATE MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════
+
 const state = {
   ws: null,
-  playerId: null,
-  username: '',
-  lang: 'nl',
-  targetId: null,
-  credits: 1000,
-
-  // three.js
-  renderer: null,
   scene: null,
+  engine: null,
   camera: null,
-  controls: null,
-  clock: new THREE.Clock(),
-
-  // scene content
-  maze: null,
-  walls: [], // axis-aligned boxes
-  entities: new Map(), // id -> { group, body, label, target, radius }
   player: null,
-
-  // gameplay
-  AVATAR_RADIUS: 0.4,
-  AVATAR_HEIGHT: 1.1,
-  PROXIMITY: 0, // set later = AVATAR_RADIUS*5
-  MOVE_SPEED: 4.0,
-  SPRINT_MULT: 1.6,
-  keys: {},
-
-  weather: { type: 'clear', intensity: 1 },
-  gameTime: 12,
-  stats: { reportsTotal: 0, reportsCorrect: 0 },
+  entities: new Map(),
+  myId: null,
+  inputState: { w: false, a: false, s: false, d: false, shift: false },
+  chatTarget: null,
+  lastMoveTime: 0,
+  lastChatTime: 0,
+  score: 0,
+  username: '',
+  stats: { reportsCorrect: 0, reportsWrong: 0, totalPlayers: 0 },
+  achievements: [],
+  activeQuests: [],
 };
 
-// derived
-state.PROXIMITY = state.AVATAR_RADIUS * 5;
+const colliders = {
+  walls: [],
+  mazeBounds: { minX: -300, maxX: 300, minZ: -300, maxZ: 300 },
+  spatialGrid: new Map(),
+  gridSize: 10,
+};
 
-// ------------------------------
-// Utilities
-// ------------------------------
-function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-}
-function addLine(user, text, isPrivate = false, isSystem = false) {
-  const div = document.createElement('div');
-  div.className = 'line' + (isPrivate ? ' private' : '') + (isSystem ? ' system' : '');
-  div.innerHTML = `<span class="user">${escapeHtml(user)}</span> ${escapeHtml(text)}`;
-  ui.chatlog.appendChild(div);
-  ui.chatlog.scrollTop = ui.chatlog.scrollHeight;
-  while (ui.chatlog.children.length > 200) ui.chatlog.removeChild(ui.chatlog.firstChild);
-}
-function updateCredits(amount, reason) {
-  state.credits += amount;
-  ui.credit.textContent = state.credits;
-  ui.credit.style.color = state.credits < 500 ? '#ff4444' : '#00ff88';
-  if (reason) addLine('SYSTEM:', reason, false, true);
-}
-function updateStats() {
-  ui.statReports.textContent = state.stats.reportsTotal;
-  const acc = state.stats.reportsTotal > 0 ?
-    ((state.stats.reportsCorrect / state.stats.reportsTotal) * 100).toFixed(0) + '%' : '--';
-  ui.statAccuracy.textContent = acc;
-}
+const ui = {
+  chatBox: null,
+  chatInput: null,
+  chatSendBtn: null,
+  scoreDisplay: null,
+  statsPanel: null,
+  contextMenu: null,
+  mChat: null,
+  mReport: null,
+  mClear: null,
+  notificationContainer: null,
+  minimapCanvas: null,
+  achievementPanel: null,
+  questPanel: null,
+};
 
-// ------------------------------
-// Weather & Time indicators
-// ------------------------------
-function updateWeather(type, intensity) {
-  state.weather = { type, intensity };
-  const icons = { clear: '☀️', cloudy: '☁️', rain: '🌧️', fog: '🌫️' };
-  ui.weatherIcon.textContent = icons[type] || '☀️';
-}
-function updateTimeOfDay(gameTime) {
-  state.gameTime = gameTime;
-  const hour = Math.floor(gameTime);
-  const min = Math.floor((gameTime - hour) * 60);
-  ui.timeDisplay.textContent = `${hour.toString().padStart(2,'0')}:${min.toString().padStart(2,'0')}`;
-}
+// ═══════════════════════════════════════════════════════════════════════════
+// ADVANCED COLLISION SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════
 
-// ------------------------------
-// Three.js scene
-// ------------------------------
-function bootThree(){
-  const w = window.innerWidth, h = window.innerHeight;
-
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setSize(w, h);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  ui.threeRoot.appendChild(renderer.domElement);
-  state.renderer = renderer;
-
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0b1020);
-  state.scene = scene;
-
-  const camera = new THREE.PerspectiveCamera(60, w/h, 0.1, 1000);
-  camera.position.set(6, 6, 10);
-  state.camera = camera;
-
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  controls.target.set(0, 0.5, 0);
-  // keep camera above ground: don't allow flipping below horizon
-  controls.minPolarAngle = 0.2;              // ~11°
-  controls.maxPolarAngle = Math.PI/2.1;      // never below ground
-  controls.minDistance = 3;
-  controls.maxDistance = 45;
-  state.controls = controls;
-
-  // Lights
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x223344, 0.6);
-  scene.add(hemi);
-
-  const dir = new THREE.DirectionalLight(0xffffff, 0.9);
-  dir.position.set(10, 20, 10);
-  dir.castShadow = true;
-  dir.shadow.camera.near = 0.5;
-  dir.shadow.camera.far = 100;
-  dir.shadow.mapSize.set(2048, 2048);
-  scene.add(dir);
-
-  // Ground
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(80, 80),
-    new THREE.MeshStandardMaterial({ color: 0x0f1b2d, roughness: 0.95, metalness: 0.0 })
-  );
-  ground.rotation.x = -Math.PI/2;
-  ground.receiveShadow = true;
-  scene.add(ground);
-
-  // Maze (low walls)
-  buildMaze(scene);
-
-  // Render loop
-  window.addEventListener('resize', onResize);
-  function onResize(){
-    const W = window.innerWidth, H = window.innerHeight;
-    renderer.setSize(W, H);
-    camera.aspect = W/H;
-    camera.updateProjectionMatrix();
+class CollisionSystem {
+  static circleAABBOverlap(x, z, r, box) {
+    const cx = Math.max(box.min.x, Math.min(x, box.max.x));
+    const cz = Math.max(box.min.z, Math.min(z, box.max.z));
+    const dx = x - cx;
+    const dz = z - cz;
+    return (dx * dx + dz * dz) < (r * r);
   }
 
-  state.clock.start();
-  let last = performance.now();
+  static resolveCircleAABB(x, z, r, box) {
+    const cx = Math.max(box.min.x, Math.min(x, box.max.x));
+    const cz = Math.max(box.min.z, Math.min(z, box.max.z));
+    let dx = x - cx;
+    let dz = z - cz;
+    let len2 = dx * dx + dz * dz;
 
-  function animate(){
-    const now = performance.now();
-    const dt = Math.min(0.05, (now - last) / 1000);
-    last = now;
+    if (len2 === 0) {
+      const leftPen = (x - box.min.x);
+      const rightPen = (box.max.x - x);
+      const topPen = (z - box.min.z);
+      const bottomPen = (box.max.z - z);
+      const minPen = Math.min(leftPen, rightPen, topPen, bottomPen);
+      
+      if (minPen === leftPen) x = box.min.x - r;
+      else if (minPen === rightPen) x = box.max.x + r;
+      else if (minPen === topPen) z = box.min.z - r;
+      else z = box.max.z + r;
+      
+      return { x, z };
+    }
 
-    tickMovement(dt);
-    interpolateRemotes(dt);
-    updateMinimap();
-
-    controls.update();
-    renderer.render(scene, camera);
-    requestAnimationFrame(animate);
+    const len = Math.sqrt(len2);
+    const pen = r - len;
+    
+    if (pen > 0) {
+      dx /= len;
+      dz /= len;
+      x += dx * pen;
+      z += dz * pen;
+    }
+    
+    return { x, z };
   }
-  animate();
+
+  static keepInsideBounds(x, z, r, bounds) {
+    if (x - r < bounds.minX) x = bounds.minX + r;
+    if (x + r > bounds.maxX) x = bounds.maxX - r;
+    if (z - r < bounds.minZ) z = bounds.minZ + r;
+    if (z + r > bounds.maxZ) z = bounds.maxZ - r;
+    return { x, z };
+  }
+
+  static solveCollisions(nextX, nextZ) {
+    let p = this.keepInsideBounds(nextX, nextZ, CONFIG.PLAYER_RADIUS, colliders.mazeBounds);
+
+    for (let pass = 0; pass < CONFIG.COLLISION_ITERATIONS; pass++) {
+      const nearbyWalls = this.getSpatialGridWalls(p.x, p.z);
+      
+      for (const box of nearbyWalls) {
+        if (this.circleAABBOverlap(p.x, p.z, CONFIG.PLAYER_RADIUS, box)) {
+          p = this.resolveCircleAABB(p.x, p.z, CONFIG.PLAYER_RADIUS, box);
+        }
+      }
+      
+      p = this.keepInsideBounds(p.x, p.z, CONFIG.PLAYER_RADIUS, colliders.mazeBounds);
+    }
+    
+    return p;
+  }
+
+  static addWallCollider(mesh) {
+    mesh.computeWorldMatrix(true);
+    const box = new BABYLON.BoundingBox(mesh.getBoundingInfo().minimum, mesh.getBoundingInfo().maximum);
+    colliders.walls.push(box);
+    
+    // Add to spatial grid
+    const gridX = Math.floor(box.minimumWorld.x / colliders.gridSize);
+    const gridZ = Math.floor(box.minimumWorld.z / colliders.gridSize);
+    const key = `${gridX},${gridZ}`;
+    
+    if (!colliders.spatialGrid.has(key)) {
+      colliders.spatialGrid.set(key, []);
+    }
+    colliders.spatialGrid.get(key).push(box);
+  }
+
+  static getSpatialGridWalls(x, z) {
+    const gridX = Math.floor(x / colliders.gridSize);
+    const gridZ = Math.floor(z / colliders.gridSize);
+    let walls = [];
+    
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const key = `${gridX + dx},${gridZ + dz}`;
+        if (colliders.spatialGrid.has(key)) {
+          walls = walls.concat(colliders.spatialGrid.get(key));
+        }
+      }
+    }
+    
+    return walls;
+  }
+
+  static recomputeMazeBounds() {
+    if (!colliders.walls.length) return;
+    
+    const all = colliders.walls.reduce((acc, b) => {
+      return {
+        minX: Math.min(acc.minX, b.minimumWorld.x),
+        maxX: Math.max(acc.maxX, b.maximumWorld.x),
+        minZ: Math.min(acc.minZ, b.minimumWorld.z),
+        maxZ: Math.max(acc.maxZ, b.maximumWorld.z),
+      };
+    }, { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
+    
+    colliders.mazeBounds = all;
+  }
 }
 
-// Simple orthogonal maze: array of walls (axis-aligned boxes)
-function buildMaze(scene){
-  state.walls = [];
+// ═══════════════════════════════════════════════════════════════════════════
+// VISUAL EFFECTS & PARTICLE SYSTEMS
+// ═══════════════════════════════════════════════════════════════════════════
 
-  // Parameters
-  const cell = 2.5;
-  const cols = 18, rows = 14; // visible in your screenshot
-  const wallH = 1.2;
-  const wallThick = 0.35;
+class VisualEffects {
+  static createAmbientParticles(scene) {
+    const particleSystem = new BABYLON.ParticleSystem("ambient", 200, scene);
+    particleSystem.particleTexture = new BABYLON.Texture("https://assets.babylonjs.com/textures/flare.png", scene);
+    
+    particleSystem.emitter = new BABYLON.Vector3(0, 5, 0);
+    particleSystem.minEmitBox = new BABYLON.Vector3(-50, 0, -50);
+    particleSystem.maxEmitBox = new BABYLON.Vector3(50, 0, 50);
+    
+    particleSystem.color1 = new BABYLON.Color4(0.8, 0.9, 1.0, 0.3);
+    particleSystem.color2 = new BABYLON.Color4(0.6, 0.7, 0.9, 0.2);
+    particleSystem.colorDead = new BABYLON.Color4(0, 0, 0, 0);
+    
+    particleSystem.minSize = 0.1;
+    particleSystem.maxSize = 0.3;
+    particleSystem.minLifeTime = 3;
+    particleSystem.maxLifeTime = 6;
+    particleSystem.emitRate = 20;
+    
+    particleSystem.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
+    particleSystem.gravity = new BABYLON.Vector3(0, -0.1, 0);
+    particleSystem.direction1 = new BABYLON.Vector3(-0.2, 0.5, -0.2);
+    particleSystem.direction2 = new BABYLON.Vector3(0.2, 0.8, 0.2);
+    
+    particleSystem.minAngularSpeed = 0;
+    particleSystem.maxAngularSpeed = Math.PI;
+    particleSystem.minEmitPower = 0.5;
+    particleSystem.maxEmitPower = 1;
+    particleSystem.updateSpeed = 0.01;
+    
+    particleSystem.start();
+    return particleSystem;
+  }
 
-  // Floor “maze platform” (slightly higher)
-  const platform = new THREE.Mesh(
-    new THREE.PlaneGeometry(cols*cell+4, rows*cell+4),
-    new THREE.MeshStandardMaterial({ color: 0x202a36, roughness: 0.8 })
-  );
-  platform.rotation.x = -Math.PI/2;
-  platform.position.y = 0.01;
-  platform.receiveShadow = true;
-  scene.add(platform);
+  static createPlayerTrail(entity, scene) {
+    const trail = new BABYLON.TrailMesh("trail", entity.node, scene, 0.1, 30, true);
+    const sourceMat = new BABYLON.StandardMaterial("trailMat", scene);
+    sourceMat.emissiveColor = new BABYLON.Color3(0.4, 0.6, 1);
+    sourceMat.alpha = 0.3;
+    trail.material = sourceMat;
+    return trail;
+  }
 
-  // Build outer border and inner walls using simple pattern (you can change pattern as you like)
-  const wallMat = new THREE.MeshStandardMaterial({ color: 0x6c7782, roughness: 0.6, metalness: 0.0 });
+  static createNametagGlow(nametag, scene) {
+    const glow = new BABYLON.GlowLayer("glow", scene);
+    glow.intensity = 0.5;
+    return glow;
+  }
 
-  function addWallBox(x, z, w, h){
-    const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(w, wallH, h),
-      wallMat
+  static createTeleportEffect(position, scene) {
+    const particles = new BABYLON.ParticleSystem("teleport", 100, scene);
+    particles.particleTexture = new BABYLON.Texture("https://assets.babylonjs.com/textures/flare.png", scene);
+    
+    particles.emitter = position;
+    particles.minEmitBox = new BABYLON.Vector3(-0.5, 0, -0.5);
+    particles.maxEmitBox = new BABYLON.Vector3(0.5, 2, 0.5);
+    
+    particles.color1 = new BABYLON.Color4(0.2, 0.8, 1.0, 1);
+    particles.color2 = new BABYLON.Color4(0.4, 0.6, 1.0, 1);
+    particles.colorDead = new BABYLON.Color4(0, 0, 0, 0);
+    
+    particles.minSize = 0.1;
+    particles.maxSize = 0.5;
+    particles.minLifeTime = 0.3;
+    particles.maxLifeTime = 0.8;
+    particles.emitRate = 200;
+    
+    particles.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
+    particles.gravity = new BABYLON.Vector3(0, 5, 0);
+    
+    particles.start();
+    setTimeout(() => {
+      particles.stop();
+      setTimeout(() => particles.dispose(), 1000);
+    }, 200);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENHANCED UI SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════
+
+class UIManager {
+  static initializeUI() {
+    this.createModernHUD();
+    this.createNotificationSystem();
+    this.createMinimap();
+    this.createAchievementPanel();
+    this.createQuestPanel();
+    this.setupContextMenu();
+  }
+
+  static createModernHUD() {
+    const hudContainer = document.createElement('div');
+    hudContainer.id = 'modern-hud';
+    hudContainer.innerHTML = `
+      <style>
+        #modern-hud {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          pointer-events: none;
+          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+          z-index: 100;
+        }
+        
+        .hud-panel {
+          background: rgba(10, 15, 30, 0.85);
+          backdrop-filter: blur(10px);
+          border: 1px solid rgba(100, 150, 255, 0.3);
+          border-radius: 12px;
+          padding: 15px;
+          pointer-events: auto;
+          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        .hud-top-left {
+          position: absolute;
+          top: 20px;
+          left: 20px;
+          min-width: 250px;
+        }
+        
+        .hud-top-right {
+          position: absolute;
+          top: 20px;
+          right: 20px;
+          min-width: 200px;
+        }
+        
+        .hud-bottom {
+          position: absolute;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          min-width: 400px;
+        }
+        
+        .score-display {
+          font-size: 32px;
+          font-weight: bold;
+          color: #4CAF50;
+          text-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+          margin-bottom: 10px;
+        }
+        
+        .score-negative {
+          color: #f44336;
+          text-shadow: 0 0 10px rgba(244, 67, 54, 0.5);
+        }
+        
+        .stat-row {
+          display: flex;
+          justify-content: space-between;
+          padding: 5px 0;
+          color: #e0e0e0;
+          font-size: 14px;
+        }
+        
+        .stat-label {
+          color: #90caf9;
+        }
+        
+        .chat-container {
+          max-height: 300px;
+          overflow-y: auto;
+          margin-bottom: 10px;
+        }
+        
+        .chat-message {
+          padding: 8px;
+          margin: 4px 0;
+          border-radius: 6px;
+          background: rgba(255, 255, 255, 0.05);
+          color: #e0e0e0;
+          font-size: 13px;
+          animation: slideIn 0.3s ease;
+        }
+        
+        @keyframes slideIn {
+          from {
+            opacity: 0;
+            transform: translateY(10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        
+        .chat-private {
+          background: rgba(156, 39, 176, 0.2);
+          border-left: 3px solid #9C27B0;
+        }
+        
+        .chat-system {
+          background: rgba(33, 150, 243, 0.2);
+          border-left: 3px solid #2196F3;
+          font-style: italic;
+        }
+        
+        .chat-input-wrapper {
+          display: flex;
+          gap: 8px;
+        }
+        
+        .chat-input {
+          flex: 1;
+          background: rgba(255, 255, 255, 0.1);
+          border: 1px solid rgba(100, 150, 255, 0.3);
+          border-radius: 6px;
+          padding: 10px;
+          color: white;
+          font-size: 14px;
+        }
+        
+        .chat-input:focus {
+          outline: none;
+          border-color: rgba(100, 150, 255, 0.6);
+          box-shadow: 0 0 10px rgba(100, 150, 255, 0.2);
+        }
+        
+        .chat-send-btn {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          border: none;
+          border-radius: 6px;
+          padding: 10px 20px;
+          color: white;
+          font-weight: bold;
+          cursor: pointer;
+          transition: transform 0.2s;
+        }
+        
+        .chat-send-btn:hover {
+          transform: scale(1.05);
+        }
+        
+        .minimap-container {
+          width: 200px;
+          height: 200px;
+          border: 2px solid rgba(100, 150, 255, 0.5);
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        
+        .notification {
+          background: rgba(10, 15, 30, 0.95);
+          border-left: 4px solid #4CAF50;
+          padding: 15px;
+          margin: 10px;
+          border-radius: 8px;
+          animation: slideInRight 0.5s ease;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        
+        @keyframes slideInRight {
+          from {
+            opacity: 0;
+            transform: translateX(100px);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+        
+        .notification-success { border-left-color: #4CAF50; }
+        .notification-error { border-left-color: #f44336; }
+        .notification-info { border-left-color: #2196F3; }
+        .notification-warning { border-left-color: #ff9800; }
+      </style>
+      
+      <div class="hud-top-left hud-panel">
+        <div class="score-display" id="score-display">
+          🏆 Social Credit: <span id="score-value">0</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Reports Correct:</span>
+          <span id="reports-correct">0</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Reports Wrong:</span>
+          <span id="reports-wrong">0</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Accuracy:</span>
+          <span id="accuracy">100%</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Players Online:</span>
+          <span id="player-count">1</span>
+        </div>
+      </div>
+      
+      <div class="hud-top-right hud-panel">
+        <div class="minimap-container">
+          <canvas id="minimap-canvas" width="200" height="200"></canvas>
+        </div>
+      </div>
+      
+      <div class="hud-bottom hud-panel">
+        <div class="chat-container" id="chat-box"></div>
+        <div class="chat-input-wrapper">
+          <input type="text" class="chat-input" id="chat-input" placeholder="Type message..." maxlength="400">
+          <button class="chat-send-btn" id="chat-send-btn">Send</button>
+        </div>
+      </div>
+    `;
+    
+    document.body.appendChild(hudContainer);
+    
+    // Cache UI elements
+    ui.chatBox = document.getElementById('chat-box');
+    ui.chatInput = document.getElementById('chat-input');
+    ui.chatSendBtn = document.getElementById('chat-send-btn');
+    ui.scoreDisplay = document.getElementById('score-value');
+  }
+
+  static createNotificationSystem() {
+    const container = document.createElement('div');
+    container.id = 'notification-container';
+    container.style.cssText = 'position: fixed; top: 20px; right: 20px; z-index: 1000; pointer-events: none;';
+    document.body.appendChild(container);
+    ui.notificationContainer = container;
+  }
+
+  static showNotification(message, type = 'info', duration = 3000) {
+    const notification = document.createElement('div');
+    notification.className = `notification notification-${type}`;
+    notification.innerHTML = `
+      <div style="font-weight: bold; margin-bottom: 5px;">${this.getNotificationIcon(type)} ${this.getNotificationTitle(type)}</div>
+      <div style="color: #b0b0b0;">${message}</div>
+    `;
+    
+    ui.notificationContainer.appendChild(notification);
+    
+    setTimeout(() => {
+      notification.style.animation = 'slideOutRight 0.5s ease';
+      setTimeout(() => notification.remove(), 500);
+    }, duration);
+  }
+
+  static getNotificationIcon(type) {
+    const icons = {
+      success: '✅',
+      error: '❌',
+      info: 'ℹ️',
+      warning: '⚠️'
+    };
+    return icons[type] || icons.info;
+  }
+
+  static getNotificationTitle(type) {
+    const titles = {
+      success: 'Success',
+      error: 'Error',
+      info: 'Info',
+      warning: 'Warning'
+    };
+    return titles[type] || titles.info;
+  }
+
+  static createMinimap() {
+    ui.minimapCanvas = document.getElementById('minimap-canvas');
+    if (ui.minimapCanvas) {
+      ui.minimapCtx = ui.minimapCanvas.getContext('2d');
+    }
+  }
+
+  static updateMinimap() {
+    if (!ui.minimapCtx || !state.player) return;
+    
+    const ctx = ui.minimapCtx;
+    const canvas = ui.minimapCanvas;
+    const scale = 0.5;
+    
+    ctx.fillStyle = 'rgba(10, 15, 30, 0.9)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw maze bounds
+    ctx.strokeStyle = 'rgba(100, 150, 255, 0.3)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
+    
+    // Draw player (center)
+    ctx.fillStyle = '#4CAF50';
+    ctx.beginPath();
+    ctx.arc(canvas.width / 2, canvas.height / 2, 5, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Draw other entities
+    state.entities.forEach((entity, id) => {
+      if (!entity.node) return;
+      
+      const dx = entity.node.position.x - state.player.node.position.x;
+      const dz = entity.node.position.z - state.player.node.position.z;
+      
+      const x = canvas.width / 2 + dx * scale;
+      const z = canvas.height / 2 + dz * scale;
+      
+      if (x > 0 && x < canvas.width && z > 0 && z < canvas.height) {
+        ctx.fillStyle = entity.isNPC ? '#ff9800' : '#2196F3';
+        ctx.beginPath();
+        ctx.arc(x, z, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+  }
+
+  static createAchievementPanel() {
+    const panel = document.createElement('div');
+    panel.id = 'achievement-panel';
+    panel.style.cssText = 'position: fixed; bottom: 100px; left: 20px; z-index: 200;';
+    document.body.appendChild(panel);
+    ui.achievementPanel = panel;
+  }
+
+  static createQuestPanel() {
+    const panel = document.createElement('div');
+    panel.id = 'quest-panel';
+    panel.innerHTML = `
+      <div class="hud-panel" style="max-width: 300px;">
+        <h3 style="color: #90caf9; margin: 0 0 10px 0;">📋 Active Quests</h3>
+        <div id="quest-list"></div>
+      </div>
+    `;
+    panel.style.cssText = 'position: fixed; bottom: 350px; left: 20px; z-index: 200;';
+    document.body.appendChild(panel);
+    ui.questPanel = panel;
+  }
+
+  static setupContextMenu() {
+    const menu = document.createElement('div');
+    menu.id = 'context-menu';
+    menu.style.cssText = `
+      position: absolute;
+      background: rgba(10, 15, 30, 0.95);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(100, 150, 255, 0.5);
+      border-radius: 8px;
+      padding: 8px 0;
+      display: none;
+      z-index: 1000;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    `;
+    
+    menu.innerHTML = `
+      <div class="menu-item" id="menu-chat">💬 Privé chat</div>
+      <div class="menu-item" id="menu-report">⚠️ Rapporteer avatar</div>
+      <div class="menu-item" id="menu-clear">🔓 Zet op Openbaar</div>
+      <style>
+        .menu-item {
+          padding: 10px 20px;
+          color: #e0e0e0;
+          cursor: pointer;
+          transition: background 0.2s;
+        }
+        .menu-item:hover {
+          background: rgba(100, 150, 255, 0.2);
+        }
+      </style>
+    `;
+    
+    document.body.appendChild(menu);
+    ui.contextMenu = menu;
+    ui.mChat = document.getElementById('menu-chat');
+    ui.mReport = document.getElementById('menu-report');
+    ui.mClear = document.getElementById('menu-clear');
+  }
+
+  static updateScore(score) {
+    state.score = score;
+    ui.scoreDisplay.textContent = score;
+    ui.scoreDisplay.parentElement.className = score < 0 ? 'score-display score-negative' : 'score-display';
+  }
+
+  static addChatMessage(msg, isPrivate = false, isSystem = false) {
+    const msgDiv = document.createElement('div');
+    msgDiv.className = `chat-message ${isPrivate ? 'chat-private' : ''} ${isSystem ? 'chat-system' : ''}`;
+    msgDiv.textContent = msg;
+    ui.chatBox.appendChild(msgDiv);
+    ui.chatBox.scrollTop = ui.chatBox.scrollHeight;
+    
+    // Limit messages
+    while (ui.chatBox.children.length > 50) {
+      ui.chatBox.removeChild(ui.chatBox.firstChild);
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SCENE & WORLD GENERATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+class WorldGenerator {
+  static createEnhancedScene(engine, canvas) {
+    const scene = new BABYLON.Scene(engine);
+    scene.clearColor = new BABYLON.Color4(0.1, 0.15, 0.25, 1);
+    scene.ambientColor = new BABYLON.Color3(0.3, 0.3, 0.4);
+    scene.fogMode = BABYLON.Scene.FOGMODE_EXP2;
+    scene.fogDensity = 0.01;
+    scene.fogColor = new BABYLON.Color3(0.1, 0.15, 0.25);
+    
+    return scene;
+  }
+
+  static setupLighting(scene) {
+    // Hemispheric light
+    const hemiLight = new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0, 1, 0), scene);
+    hemiLight.intensity = 0.6;
+    hemiLight.diffuse = new BABYLON.Color3(0.9, 0.95, 1);
+    hemiLight.specular = new BABYLON.Color3(0.5, 0.5, 0.6);
+    hemiLight.groundColor = new BABYLON.Color3(0.2, 0.25, 0.3);
+    
+    // Directional light (sun)
+    const dirLight = new BABYLON.DirectionalLight("sun", new BABYLON.Vector3(-1, -2, -1), scene);
+    dirLight.intensity = 0.8;
+    dirLight.diffuse = new BABYLON.Color3(1, 0.95, 0.8);
+    dirLight.specular = new BABYLON.Color3(1, 1, 0.9);
+    
+    // Shadows
+    const shadowGenerator = new BABYLON.ShadowGenerator(1024, dirLight);
+    shadowGenerator.useBlurExponentialShadowMap = true;
+    shadowGenerator.blurKernel = 32;
+    
+    return { hemiLight, dirLight, shadowGenerator };
+  }
+
+  static createGround(scene, shadowGenerator) {
+    const ground = BABYLON.MeshBuilder.CreateGround("ground", {
+      width: 600,
+      height: 600,
+      subdivisions: 50
+    }, scene);
+    
+    const groundMat = new BABYLON.PBRMaterial("groundMat", scene);
+    groundMat.albedoColor = new BABYLON.Color3(0.2, 0.3, 0.2);
+    groundMat.metallic = 0;
+    groundMat.roughness = 0.9;
+    groundMat.bumpTexture = new BABYLON.Texture("https://assets.babylonjs.com/textures/grass.png", scene);
+    groundMat.bumpTexture.uScale = 50;
+    groundMat.bumpTexture.vScale = 50;
+    
+    ground.material = groundMat;
+    ground.receiveShadows = true;
+    ground.checkCollisions = false;
+    
+    return ground;
+  }
+
+  static async createMaze(scene, shadowGenerator) {
+    const wallHeight = 3;
+    const wallThickness = 0.5;
+    const corridorWidth = 4;
+    
+    // Create PBR material for walls
+    const wallMat = new BABYLON.PBRMaterial("wallMat", scene);
+    wallMat.albedoColor = new BABYLON.Color3(0.7, 0.75, 0.8);
+    wallMat.metallic = 0.2;
+    wallMat.roughness = 0.7;
+    wallMat.bumpTexture = new BABYLON.Texture("https://assets.babylonjs.com/textures/rock.png", scene);
+    
+    // Simple maze pattern
+    const mazeLayout = [
+      "##########",
+      "#....#...#",
+      "#.##.#.#.#",
+      "#....#.#.#",
+      "####.#.#.#",
+      "#....#...#",
+      "#.####.###",
+      "#.......##",
+      "#.#####..#",
+      "##########"
+    ];
+    
+    const cellSize = corridorWidth + wallThickness;
+    const mazeWidth = mazeLayout[0].length * cellSize;
+    const mazeHeight = mazeLayout.length * cellSize;
+    const offsetX = -mazeWidth / 2;
+    const offsetZ = -mazeHeight / 2;
+    
+    for (let row = 0; row < mazeLayout.length; row++) {
+      for (let col = 0; col < mazeLayout[row].length; col++) {
+        if (mazeLayout[row][col] === '#') {
+          const wall = BABYLON.MeshBuilder.CreateBox(`wall_${row}_${col}`, {
+            width: cellSize,
+            height: wallHeight,
+            depth: cellSize
+          }, scene);
+          
+          wall.position = new BABYLON.Vector3(
+            offsetX + col * cellSize + cellSize / 2,
+            wallHeight / 2,
+            offsetZ + row * cellSize + cellSize / 2
+          );
+          
+          wall.material = wallMat;
+          wall.checkCollisions = false;
+          shadowGenerator.addShadowCaster(wall);
+          
+          // Add collider
+          CollisionSystem.addWallCollider(wall);
+        }
+      }
+    }
+    
+    // Recompute maze bounds
+    CollisionSystem.recomputeMazeBounds();
+    
+    return { width: mazeWidth, height: mazeHeight };
+  }
+
+  static setupCamera(scene, canvas) {
+    const camera = new BABYLON.ArcRotateCamera(
+      "camera",
+      Math.PI / 2,
+      Math.PI / 3,
+      10,
+      BABYLON.Vector3.Zero(),
+      scene
     );
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    mesh.position.set(x, wallH/2, z);
-    scene.add(mesh);
-    // store AABB for collision
-    const aabb = new THREE.Box3().setFromObject(mesh);
-    state.walls.push({ mesh, aabb });
+    
+    camera.attachControl(canvas, true);
+    camera.lowerRadiusLimit = 3;
+    camera.upperRadiusLimit = 20;
+    camera.lowerBetaLimit = 0.1;
+    camera.upperBetaLimit = Math.PI / 2.2;
+    camera.panningSensibility = 50;
+    camera.wheelDeltaPercentage = 0.01;
+    camera.pinchDeltaPercentage = 0.01;
+    
+    return camera;
   }
 
-  const W = cols*cell, H = rows*cell;
-  // border
-  addWallBox(0, -H/2, W, wallThick);
-  addWallBox(0,  H/2, W, wallThick);
-  addWallBox(-W/2, 0, wallThick, H);
-  addWallBox( W/2, 0, wallThick, H);
-
-  // a simple procedural maze (horizontal and vertical segments)
-  for (let r=2; r<rows-1; r+=2){
-    const segs = Math.floor(cols/3);
-    for (let s=0; s<segs; s++){
-      const x = -W/2 + (s*3+1.5)*cell;
-      const z = -H/2 + r*cell;
-      addWallBox(x, z, cell*1.6, wallThick);
-    }
-  }
-  for (let c=3; c<cols-1; c+=3){
-    const segs = Math.floor(rows/3);
-    for (let s=0; s<segs; s++){
-      const x = -W/2 + c*cell;
-      const z = -H/2 + (s*3+1.5)*cell;
-      addWallBox(x, z, wallThick, cell*1.6);
-    }
-  }
-
-  // keep reference for bounds if needed
-  state.maze = { width: W, height: H, cell, wallH };
-}
-
-// ------------------------------
-// Avatar building + labels
-// ------------------------------
-function makeAvatarGroup(color = 0xf1a028){
-  // stylized “robot” using primitives
-  const group = new THREE.Group();
-
-  // body
-  const body = new THREE.Mesh(
-    new THREE.CapsuleGeometry(state.AVATAR_RADIUS, state.AVATAR_HEIGHT - state.AVATAR_RADIUS*2, 8, 16),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: 0.12 })
-  );
-  body.castShadow = true;
-  body.receiveShadow = true;
-  group.add(body);
-
-  // simple “visor”
-  const visor = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.32, 0.32, 0.15, 16),
-    new THREE.MeshStandardMaterial({ color: 0x222b33, roughness: 0.9 })
-  );
-  visor.rotation.z = Math.PI/2;
-  visor.position.set(0, 0.55, 0.18);
-  visor.castShadow = true;
-  group.add(visor);
-
-  // feet (small spheres)
-  const footL = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 12),
-    new THREE.MeshStandardMaterial({ color: 0x222b33 }));
-  const footR = footL.clone();
-  footL.position.set(-0.15, -state.AVATAR_HEIGHT/2 + 0.14, 0);
-  footR.position.set( 0.15, -state.AVATAR_HEIGHT/2 + 0.14, 0);
-  group.add(footL, footR);
-
-  return { group, body };
-}
-
-function makeNameLabel(text){
-  // draw text into canvas and make a sprite that always faces the camera
-  const padX = 24, padY = 10, font = 24;
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  ctx.font = `bold ${font}px Arial`;
-  const metrics = ctx.measureText(text);
-  const w = Math.ceil(metrics.width) + padX*2;
-  const h = font + padY*2;
-  canvas.width = w;
-  canvas.height = h;
-
-  // redraw with correct size
-  ctx.fillStyle = 'rgba(0,0,0,0.75)';
-  ctx.fillRect(0, 0, w, h);
-  ctx.strokeStyle = '#00ff88';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(1, 1, w-2, h-2);
-
-  ctx.fillStyle = '#00ff88';
-  ctx.font = `bold ${font}px Arial`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, w/2, h/2);
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.magFilter = THREE.LinearFilter;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-
-  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
-  const spr = new THREE.Sprite(mat);
-  const scale = 0.008; // scale from pixels to world
-  spr.scale.set(w*scale, h*scale, 1);
-  // position above head
-  spr.position.set(0, state.AVATAR_HEIGHT/2 + 0.8, 0);
-  return spr;
-}
-
-function addEntity(id, x, z, name, color){
-  if (state.entities.has(id)) return;
-  const { group } = makeAvatarGroup(color);
-  group.position.set(x, state.AVATAR_HEIGHT/2, z);
-  group.userData.entityId = id;
-  group.traverse(o => o.userData.entityId = id);
-
-  // label
-  const label = makeNameLabel(name || id);
-  group.add(label);
-
-  state.scene.add(group);
-
-  state.entities.set(id, {
-    id, name: name || id,
-    group,
-    label,
-    target: group.position.clone(),
-    radius: state.AVATAR_RADIUS
-  });
-}
-
-function removeEntity(id){
-  const e = state.entities.get(id);
-  if (!e) return;
-  state.scene.remove(e.group);
-  e.group.traverse((o)=> {
-    if (o.material && o.material.map && o.material.map.dispose) o.material.map.dispose();
-    if (o.material && o.material.dispose) o.material.dispose();
-    if (o.geometry && o.geometry.dispose) o.geometry.dispose();
-  });
-  state.entities.delete(id);
-}
-
-// ------------------------------
-// Input & movement (WASD)
-// ------------------------------
-window.addEventListener('keydown', e => { state.keys[e.key.toLowerCase()] = true; });
-window.addEventListener('keyup', e => { state.keys[e.key.toLowerCase()] = false; });
-
-function tickMovement(dt){
-  if (!state.player) return;
-  const me = state.player;
-
-  const forward = (state.keys['w'] ? 1 : 0) - (state.keys['s'] ? 1 : 0);
-  const right   = (state.keys['d'] ? 1 : 0) - (state.keys['a'] ? 1 : 0);
-  if (!forward && !right) return;
-
-  const speed = state.MOVE_SPEED * (state.keys['shift'] ? state.SPRINT_MULT : 1.0);
-  const dirCam = new THREE.Vector3();
-  state.camera.getWorldDirection(dirCam);
-  dirCam.y = 0; dirCam.normalize();
-
-  const rightVec = new THREE.Vector3().crossVectors(dirCam, new THREE.Vector3(0,1,0)).negate().normalize();
-
-  const moveVec = new THREE.Vector3()
-    .addScaledVector(dirCam, forward)
-    .addScaledVector(rightVec, right)
-    .normalize()
-    .multiplyScalar(speed * dt);
-
-  const next = me.group.position.clone().add(moveVec);
-
-  // prevent leaving maze bounds
-  const pad = 1.0;
-  next.x = THREE.MathUtils.clamp(next.x, -state.maze.width/2 + pad, state.maze.width/2 - pad);
-  next.z = THREE.MathUtils.clamp(next.z, -state.maze.height/2 + pad, state.maze.height/2 - pad);
-
-  // collision with walls (AABB vs sphere/ capsule simplified)
-  const rad = me.radius + 0.05;
-  const pos = me.group.position;
-  const candidate = next.clone();
-
-  // resolve per axis to avoid snagging
-  // X axis
-  let test = new THREE.Vector3(candidate.x, pos.y, pos.z);
-  if (!sphereCollides(test, rad)){
-    pos.x = candidate.x;
-  } else {
-    // zero x movement
-  }
-  // Z axis
-  test.set(pos.x, pos.y, candidate.z);
-  if (!sphereCollides(test, rad)){
-    pos.z = candidate.z;
-  } else {
-    // zero z movement
-  }
-
-  // keep camera target following player
-  state.controls.target.lerp(new THREE.Vector3(pos.x, pos.y, pos.z), 0.12);
-
-  // send throttled position
-  const now = performance.now();
-  if (!tickMovement.last || now - tickMovement.last > 90) {
-    tickMovement.last = now;
-    if (state.ws?.readyState === WebSocket.OPEN) {
-      state.ws.send(JSON.stringify({ type: 'move', x: pos.x, z: pos.z }));
-    }
+  static setupPostProcessing(scene, camera) {
+    const pipeline = new BABYLON.DefaultRenderingPipeline("default", true, scene, [camera]);
+    
+    pipeline.fxaaEnabled = true;
+    pipeline.bloomEnabled = true;
+    pipeline.bloomThreshold = 0.8;
+    pipeline.bloomWeight = 0.3;
+    pipeline.bloomKernel = 64;
+    pipeline.bloomScale = 0.5;
+    
+    pipeline.imageProcessingEnabled = true;
+    pipeline.imageProcessing.toneMappingEnabled = true;
+    pipeline.imageProcessing.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
+    pipeline.imageProcessing.exposure = 1.2;
+    pipeline.imageProcessing.contrast = 1.1;
+    
+    // Depth of field
+    pipeline.depthOfFieldEnabled = true;
+    pipeline.depthOfFieldBlurLevel = BABYLON.DepthOfFieldEffectBlurLevel.Low;
+    pipeline.depthOfField.focalLength = 150;
+    pipeline.depthOfField.fStop = 1.4;
+    pipeline.depthOfField.focusDistance = 2000;
+    
+    return pipeline;
   }
 }
 
-function sphereCollides(center, radius){
-  for (const w of state.walls){
-    const aabb = w.aabb;
-    // compute closest point on AABB to center
-    const cx = THREE.MathUtils.clamp(center.x, aabb.min.x, aabb.max.x);
-    const cy = THREE.MathUtils.clamp(center.y, aabb.min.y, aabb.max.y);
-    const cz = THREE.MathUtils.clamp(center.z, aabb.min.z, aabb.max.z);
-    const dx = center.x - cx, dy = center.y - cy, dz = center.z - cz;
-    if ((dx*dx + dy*dy + dz*dz) < radius*radius) return true;
-  }
-  return false;
-}
+// ═══════════════════════════════════════════════════════════════════════════
+// ENTITY MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════
 
-function interpolateRemotes(dt){
-  state.entities.forEach((ent, id) => {
-    if (id === state.playerId) return;
-    if (!ent.target) return;
-    ent.group.position.lerp(ent.target, 0.15);
-  });
-}
-
-// ------------------------------
-// Minimap
-// ------------------------------
-function setupMinimap(){
-  const c = ui.minimapCanvas;
-  c.width = 220; c.height = 220;
-}
-setupMinimap();
-
-function updateMinimap(){
-  const c = ui.minimapCanvas;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = 'rgba(10,15,24,0.95)';
-  ctx.fillRect(0,0,c.width,c.height);
-
-  // grid
-  ctx.strokeStyle = '#1a2d3a';
-  for(let i=0;i<=11;i++){
-    const p = i*(c.width/11);
-    ctx.beginPath(); ctx.moveTo(p,0); ctx.lineTo(p,c.height); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0,p); ctx.lineTo(c.width,p); ctx.stroke();
+class EntityManager {
+  static async createAvatar(scene, shadowGenerator) {
+    const avatar = BABYLON.MeshBuilder.CreateCapsule("avatar", {
+      radius: CONFIG.PLAYER_RADIUS,
+      height: CONFIG.PLAYER_HEIGHT,
+      subdivisions: 16
+    }, scene);
+    
+    const mat = new BABYLON.PBRMaterial("avatarMat", scene);
+    mat.albedoColor = new BABYLON.Color3(0.2, 0.6, 1);
+    mat.metallic = 0.1;
+    mat.roughness = 0.6;
+    mat.emissiveColor = new BABYLON.Color3(0.1, 0.3, 0.5);
+    avatar.material = mat;
+    
+    shadowGenerator.addShadowCaster(avatar);
+    
+    return avatar;
   }
 
-  // draw entities, map world [-W/2..W/2]x[-H/2..H/2] to [12..208]
-  const W = state.maze?.width || 80, H = state.maze?.height || 80;
-  const margin = 12;
-  function toX(x){ return margin + (x + W/2) / W * (c.width - margin*2); }
-  function toY(z){ return margin + (z + H/2) / H * (c.height - margin*2); }
+  static createNameTag(name, scene) {
+    const plane = BABYLON.MeshBuilder.CreatePlane("nametag", { width: 2, height: 0.5 }, scene);
+    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    plane.position.y = CONFIG.PLAYER_HEIGHT + 0.5;
+    
+    const texture = new BABYLON.DynamicTexture("nametagTex", { width: 512, height: 128 }, scene, false);
+    const ctx = texture.getContext();
+    
+    ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+    ctx.fillRect(0, 0, 512, 128);
+    
+    ctx.font = "bold 48px Arial";
+    ctx.fillStyle = "white";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(name, 256, 64);
+    
+    texture.update();
+    
+    const mat = new BABYLON.StandardMaterial("nametagMat", scene);
+    mat.diffuseTexture = texture;
+    mat.emissiveTexture = texture;
+    mat.opacityTexture = texture;
+    mat.disableLighting = true;
+    mat.backFaceCulling = false;
+    
+    plane.material = mat;
+    
+    return plane;
+  }
 
-  state.entities.forEach((ent, id)=>{
-    const x = toX(ent.group.position.x);
-    const y = toY(ent.group.position.z);
-    const isMe = id === state.playerId;
-    ctx.fillStyle = isMe ? '#00ff88' : '#8aa';
-    ctx.beginPath(); ctx.arc(x, y, isMe ? 5 : 3, 0, Math.PI*2); ctx.fill();
-    if (isMe){
-      ctx.strokeStyle = '#00ff88';
-      ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI*2); ctx.stroke();
-    }
-  });
-}
-
-// ------------------------------
-// Context menu (right-click on avatar)
-// ------------------------------
-const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
-
-state.renderer?.domElement?.addEventListener?.('contextmenu', onContext); // if renderer exists later
-window.addEventListener('contextmenu', onContext);
-function onContext(ev){
-  ev.preventDefault();
-  if (!state.renderer || !state.scene || !state.camera) return;
-  const rect = state.renderer.domElement.getBoundingClientRect();
-  mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-  mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
-
-  raycaster.setFromCamera(mouse, state.camera);
-  // Collect all avatar groups' children
-  const meshes = [];
-  state.entities.forEach(ent => ent.group.traverse(o => { if (o.isMesh) meshes.push(o); }));
-  const hits = raycaster.intersectObjects(meshes, true);
-  const first = hits.find(h=>h.object?.userData?.entityId);
-  const menu = ui.rightMenu;
-
-  menu.style.left = ev.clientX + 'px';
-  menu.style.top = ev.clientY + 'px';
-  menu.style.display = 'block';
-
-  if (first){
-    const id = first.object.userData.entityId;
-    const ent = state.entities.get(id);
-
-    ui.mChat.textContent = '💬 Privé chat met ' + (ent?.name || 'Onbekend');
-    ui.mReport.textContent = '⚠️ Rapporteer ' + (ent?.name || 'Onbekend');
-
-    ui.mChat.onclick = () => {
-      state.targetId = id;
-      ui.targetName.textContent = ent?.name || 'Openbaar';
-      menu.style.display = 'none';
+  static addEntity(id, name, x, z, isNPC, scene, shadowGenerator) {
+    if (state.entities.has(id)) return state.entities.get(id);
+    
+    const node = this.createAvatar(scene, shadowGenerator);
+    node.position.set(x, CONFIG.PLAYER_HEIGHT / 2, z);
+    
+    const nametag = this.createNameTag(name, scene);
+    nametag.parent = node;
+    
+    // Apply spawn collision check
+    const safePos = CollisionSystem.solveCollisions(x, z);
+    node.position.x = safePos.x;
+    node.position.z = safePos.z;
+    
+    const entity = {
+      id,
+      name,
+      node,
+      nametag,
+      target: node.position.clone(),
+      isNPC,
+      lastUpdate: Date.now()
     };
-    ui.mReport.onclick = () => {
-      if (state.ws?.readyState === WebSocket.OPEN) {
-        state.ws.send(JSON.stringify({ type: 'report', reportedId: id }));
+    
+    state.entities.set(id, entity);
+    
+    // Spawn effect
+    VisualEffects.createTeleportEffect(node.position, scene);
+    
+    return entity;
+  }
+
+  static removeEntity(id) {
+    const entity = state.entities.get(id);
+    if (!entity) return;
+    
+    if (entity.nametag) entity.nametag.dispose();
+    if (entity.node) entity.node.dispose();
+    if (entity.trail) entity.trail.dispose();
+    
+    state.entities.delete(id);
+  }
+
+  static updateEntity(entity, dt) {
+    if (!entity.node || !entity.target) return;
+    
+    const dist = BABYLON.Vector3.Distance(entity.node.position, entity.target);
+    
+    if (dist > 0.05) {
+      const direction = entity.target.subtract(entity.node.position).normalize();
+      const moveSpeed = entity.isNPC ? CONFIG.MOVE_SPEED * 0.7 : CONFIG.MOVE_SPEED;
+      const step = direction.scale(moveSpeed * dt);
+      
+      const newX = entity.node.position.x + step.x;
+      const newZ = entity.node.position.z + step.z;
+      
+      // Apply collision correction
+      const solved = CollisionSystem.solveCollisions(newX, newZ);
+      entity.node.position.x = solved.x;
+      entity.node.position.z = solved.z;
+      
+      // Rotate towards movement direction
+      if (step.length() > 0.01) {
+        const angle = Math.atan2(step.x, step.z);
+        entity.node.rotation.y = angle;
       }
-      menu.style.display = 'none';
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INPUT & MOVEMENT
+// ═══════════════════════════════════════════════════════════════════════════
+
+class InputManager {
+  static setupInput(canvas) {
+    // Keyboard
+    window.addEventListener('keydown', (e) => {
+      const key = e.key.toLowerCase();
+      if (key === 'w' || key === 'arrowup') state.inputState.w = true;
+      if (key === 'a' || key === 'arrowleft') state.inputState.a = true;
+      if (key === 's' || key === 'arrowdown') state.inputState.s = true;
+      if (key === 'd' || key === 'arrowright') state.inputState.d = true;
+      if (key === 'shift') state.inputState.shift = true;
+    });
+    
+    window.addEventListener('keyup', (e) => {
+      const key = e.key.toLowerCase();
+      if (key === 'w' || key === 'arrowup') state.inputState.w = false;
+      if (key === 'a' || key === 'arrowleft') state.inputState.a = false;
+      if (key === 's' || key === 'arrowdown') state.inputState.s = false;
+      if (key === 'd' || key === 'arrowright') state.inputState.d = false;
+      if (key === 'shift') state.inputState.shift = false;
+    });
+    
+    // Context menu
+    canvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      this.handleRightClick(e);
+    });
+    
+    // Hide context menu on click away
+    window.addEventListener('click', (e) => {
+      if (!ui.contextMenu.contains(e.target)) {
+        ui.contextMenu.style.display = 'none';
+      }
+    });
+  }
+
+  static handleRightClick(e) {
+    const pickResult = state.scene.pick(e.clientX, e.clientY);
+    
+    if (pickResult.hit && pickResult.pickedMesh) {
+      // Check if clicked on an entity
+      for (const [id, entity] of state.entities) {
+        if (entity.node === pickResult.pickedMesh || entity.node.getChildren().includes(pickResult.pickedMesh)) {
+          ui.mChat.textContent = `💬 Privé chat met ${entity.name}`;
+          ui.mReport.textContent = `⚠️ Rapporteer ${entity.name}`;
+          
+          ui.mChat.onclick = () => {
+            state.chatTarget = id;
+            UIManager.showNotification(`Nu privé chatten met ${entity.name}`, 'info');
+            ui.contextMenu.style.display = 'none';
+          };
+          
+          ui.mReport.onclick = () => {
+            NetworkManager.sendReport(id);
+            ui.contextMenu.style.display = 'none';
+          };
+          
+          ui.contextMenu.style.left = `${e.clientX}px`;
+          ui.contextMenu.style.top = `${e.clientY}px`;
+          ui.contextMenu.style.display = 'block';
+          return;
+        }
+      }
+    }
+    
+    // Clicked on ground - show clear option
+    ui.mChat.style.display = 'none';
+    ui.mReport.style.display = 'none';
+    ui.mClear.style.display = 'block';
+    
+    ui.mClear.onclick = () => {
+      state.chatTarget = null;
+      UIManager.showNotification('Terug naar openbare chat', 'info');
+      ui.contextMenu.style.display = 'none';
     };
-  } else {
-    ui.mChat.textContent = 'Geen avatar hier';
-    ui.mReport.textContent = '—';
-    ui.mChat.onclick = () => menu.style.display = 'none';
-    ui.mReport.onclick = () => menu.style.display = 'none';
+    
+    ui.contextMenu.style.left = `${e.clientX}px`;
+    ui.contextMenu.style.top = `${e.clientY}px`;
+    ui.contextMenu.style.display = 'block';
   }
 
-  ui.mClear.onclick = () => {
-    state.targetId = null;
-    ui.targetName.textContent = 'Openbaar';
-    menu.style.display = 'none';
-  };
-  setTimeout(()=>window.addEventListener('click', ()=>menu.style.display='none', { once:true }), 100);
-}
-
-// ------------------------------
-// Chat send (with proximity check for private chat)
-// ------------------------------
-function sendMessage(text){
-  if (!text || !text.trim()) return;
-  const payload = { type:'chat', message: text.trim() };
-  if (state.targetId) {
-    // proximity requirement
-    const me = state.entities.get(state.playerId);
-    const other = state.entities.get(state.targetId);
-    if (!me || !other){
-      addLine('SYSTEM:', 'Doel niet beschikbaar.', false, true);
-      return;
+  static tickMovement(dt) {
+    if (!state.player || !state.player.node) return;
+    
+    const input = state.inputState;
+    if (!input.w && !input.a && !input.s && !input.d) return;
+    
+    const camera = state.camera;
+    const forward = camera.getForwardRay().direction;
+    forward.y = 0;
+    forward.normalize();
+    
+    const right = BABYLON.Vector3.Cross(forward, BABYLON.Vector3.Up());
+    
+    let moveDir = BABYLON.Vector3.Zero();
+    if (input.w) moveDir.addInPlace(forward);
+    if (input.s) moveDir.subtractInPlace(forward);
+    if (input.d) moveDir.addInPlace(right);
+    if (input.a) moveDir.subtractInPlace(right);
+    
+    if (moveDir.length() > 0) {
+      moveDir.normalize();
+      const speed = input.shift ? CONFIG.SPRINT_SPEED : CONFIG.MOVE_SPEED;
+      const delta = moveDir.scale(speed * dt);
+      
+      const newX = state.player.node.position.x + delta.x;
+      const newZ = state.player.node.position.z + delta.z;
+      
+      // Apply collision
+      const solved = CollisionSystem.solveCollisions(newX, newZ);
+      state.player.node.position.x = solved.x;
+      state.player.node.position.z = solved.z;
+      
+      // Update rotation
+      const angle = Math.atan2(moveDir.x, moveDir.z);
+      state.player.node.rotation.y = angle;
+      
+      // Send to server (throttled)
+      const now = Date.now();
+      if (now - state.lastMoveTime > 50) {
+        NetworkManager.sendMove(solved.x, solved.z);
+        state.lastMoveTime = now;
+      }
     }
-    const dist = me.group.position.distanceTo(other.group.position);
-    if (dist > state.PROXIMITY){
-      addLine('SYSTEM:', 'Je staat te ver weg voor privé-chat.', false, true);
-      return;
-    }
-    payload.targetId = state.targetId;
   }
-  if (state.ws?.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify(payload));
 }
 
-// ------------------------------
-// WebSocket protocol
-// ------------------------------
-function connectWS(){
-  state.ws = new WebSocket(WS_URL);
+// ═══════════════════════════════════════════════════════════════════════════
+// NETWORK MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════
 
-  state.ws.addEventListener('open', ()=>{
-    ui.conn.textContent = '● Connected';
-    ui.conn.style.color = '#00ff88';
+class NetworkManager {
+  static connect() {
+    state.ws = new WebSocket(CONFIG.SERVER_URL);
+    
+    state.ws.onopen = () => {
+      UIManager.showNotification('Verbonden met server!', 'success');
+      this.sendJoin();
+    };
+    
+    state.ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        this.handleMessage(msg);
+      } catch (err) {
+        console.error('Failed to parse message:', err);
+      }
+    };
+    
+    state.ws.onerror = (err) => {
+      console.error('WebSocket error:', err);
+      UIManager.showNotification('Verbindingsfout', 'error');
+    };
+    
+    state.ws.onclose = () => {
+      UIManager.showNotification('Verbinding verbroken', 'warning');
+      setTimeout(() => this.connect(), 3000);
+    };
+  }
 
-    state.ws.send(JSON.stringify({
+  static sendJoin() {
+    const name = state.username || prompt('Voer je naam in:') || 'Player';
+    state.username = name;
+    
+    this.send({
       type: 'join',
-      playerId: state.playerId,
-      username: state.username,
-      x: 0, z: 0
-    }));
+      name: name
+    });
+  }
 
-    addLine('SYSTEM:', 'Verbonden met server. Wereld laden...', false, true);
-  });
+  static sendMove(x, z) {
+    this.send({
+      type: 'move',
+      x: Math.round(x * 100) / 100,
+      z: Math.round(z * 100) / 100
+    });
+  }
 
-  state.ws.addEventListener('message', (e)=>{
-    let data; try{ data = JSON.parse(e.data); } catch { return; }
-    switch (data.type){
-      case 'init': {
-        // build local player + others + NPCs
-        (data.players || []).forEach(p => addEntity(p.id, p.x, p.z, p.username, 0xf1a028));
-        (data.npcs || []).forEach(n => addEntity(n.id, n.x, n.z, n.name, 0xd9b16f));
+  static sendChat(text) {
+    if (!text.trim()) return;
+    
+    this.send({
+      type: 'chat',
+      text: text,
+      target: state.chatTarget
+    });
+    
+    state.lastChatTime = Date.now();
+  }
 
-        // ensure self exists
-        if (!state.entities.get(state.playerId)) addEntity(state.playerId, 0, 0, state.username, 0x44eeaa);
-        state.player = state.entities.get(state.playerId);
+  static sendReport(targetId) {
+    this.send({
+      type: 'report',
+      targetId: targetId
+    });
+    
+    UIManager.showNotification('Rapport ingediend', 'info');
+  }
 
-        // center camera
-        state.controls.target.copy(state.player.group.position);
-
-        // weather/time
-        if (data.weather){
-          updateWeather(data.weather.type, data.weather.intensity);
-          updateTimeOfDay(data.weather.gameTime);
-        }
-
-        // “Players” counter is meant to be total avatars (NPCs + players)
-        const totalAvatars = (data.players?.length || 0) + (data.npcs?.length || 0);
-        ui.statPlayers.textContent = totalAvatars;
-
-        // hide spinner
-        ui.loadingSpinner.style.display = 'none';
-        break;
-      }
-      case 'player_joined': {
-        if (data.player.id === state.playerId) break;
-        addEntity(data.player.id, data.player.x, data.player.z, data.player.username, 0xf1a028);
-        addLine('SYSTEM:', `${data.player.username} heeft zich aangesloten`, false, true);
-        // update total avatars counter (+1)
-        ui.statPlayers.textContent = String(Number(ui.statPlayers.textContent) + 1);
-        break;
-      }
-      case 'player_left': {
-        // remove and update total avatars counter (-1)
-        removeEntity(data.playerId);
-        ui.statPlayers.textContent = String(Math.max(0, Number(ui.statPlayers.textContent) - 1));
-        break;
-      }
-      case 'player_move': {
-        const ent = state.entities.get(data.playerId);
-        if (ent) ent.target = new THREE.Vector3(data.x, state.AVATAR_HEIGHT/2, data.z);
-        break;
-      }
-      case 'npc_update': {
-        (data.npcs || []).forEach(n=>{
-          const ent = state.entities.get(n.id);
-          if (ent) ent.target = new THREE.Vector3(n.x, state.AVATAR_HEIGHT/2, n.z);
-        });
-        break;
-      }
-      case 'chat': {
-        const isPrivate = !!data.private;
-        const who = data.username || 'Onbekend';
-        addLine(isPrivate ? `${who} (privé):` : `${who}:`, data.message, isPrivate);
-        break;
-      }
-      case 'penalty': {
-        updateCredits(data.amount, data.reason);
-        break;
-      }
-      case 'report_result': {
-        state.stats.reportsTotal++;
-        if (data.correct) {
-          state.stats.reportsCorrect++;
-          updateCredits(50, `Correct! ${data.reportedName} is een echte speler`);
-        } else {
-          updateCredits(-30, `Onjuist rapport over ${data.reportedName}`);
-        }
-        updateStats();
-        break;
-      }
-      case 'weather_update': {
-        updateWeather(data.weather, data.intensity);
-        break;
-      }
-      case 'time_update': {
-        updateTimeOfDay(data.gameTime);
-        break;
-      }
-      case 'system': {
-        addLine('SYSTEM:', data.message, false, true);
-        break;
-      }
-      case 'position_correction': {
-        if (state.player){
-          state.player.group.position.set(data.x, state.AVATAR_HEIGHT/2, data.z);
-        }
-        break;
-      }
+  static send(data) {
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+      state.ws.send(JSON.stringify(data));
     }
-  });
+  }
 
-  state.ws.addEventListener('close', ()=>{
-    ui.conn.textContent = '● Reconnecting...';
-    ui.conn.style.color = '#ff8800';
-    addLine('SYSTEM:', 'Verbinding verbroken. Opnieuw verbinden...', false, true);
-    setTimeout(connectWS, 1500);
-  });
+  static handleMessage(msg) {
+    switch (msg.type) {
+      case 'init':
+        this.handleInit(msg);
+        break;
+      case 'player_joined':
+        this.handlePlayerJoined(msg);
+        break;
+      case 'player_left':
+        this.handlePlayerLeft(msg);
+        break;
+      case 'player_move':
+        this.handlePlayerMove(msg);
+        break;
+      case 'npc_update':
+        this.handleNPCUpdate(msg);
+        break;
+      case 'chat_message':
+        this.handleChatMessage(msg);
+        break;
+      case 'score_update':
+        this.handleScoreUpdate(msg);
+        break;
+      case 'report_result':
+        this.handleReportResult(msg);
+        break;
+      case 'stats':
+        this.handleStats(msg);
+        break;
+    }
+  }
 
-  state.ws.addEventListener('error', (err) => {
-    console.error('[WS] Error', err);
-  });
+  static handleInit(msg) {
+    state.myId = msg.id;
+    
+    // Create local player
+    state.player = EntityManager.addEntity(
+      msg.id,
+      msg.name,
+      msg.x,
+      msg.z,
+      false,
+      state.scene,
+      state.shadowGenerator
+    );
+    
+    // Add other players
+    if (msg.players) {
+      msg.players.forEach(p => {
+        if (p.id !== state.myId) {
+          EntityManager.addEntity(p.id, p.name, p.x, p.z, false, state.scene, state.shadowGenerator);
+        }
+      });
+    }
+    
+    // Add NPCs
+    if (msg.npcs) {
+      msg.npcs.forEach(npc => {
+        EntityManager.addEntity(npc.id, npc.name, npc.x, npc.z, true, state.scene, state.shadowGenerator);
+      });
+    }
+    
+    UIManager.updateScore(msg.score || 0);
+  }
+
+  static handlePlayerJoined(msg) {
+    EntityManager.addEntity(msg.id, msg.name, msg.x, msg.z, false, state.scene, state.shadowGenerator);
+    UIManager.addChatMessage(`${msg.name} heeft het spel betreden`, false, true);
+    UIManager.showNotification(`${msg.name} heeft het spel betreden`, 'info');
+  }
+
+  static handlePlayerLeft(msg) {
+    const entity = state.entities.get(msg.id);
+    if (entity) {
+      UIManager.addChatMessage(`${entity.name} heeft het spel verlaten`, false, true);
+    }
+    EntityManager.removeEntity(msg.id);
+  }
+
+  static handlePlayerMove(msg) {
+    const entity = state.entities.get(msg.id);
+    if (entity && entity.id !== state.myId) {
+      // Apply collision correction to remote position
+      const fixed = CollisionSystem.solveCollisions(msg.x, msg.z);
+      entity.target.set(fixed.x, CONFIG.PLAYER_HEIGHT / 2, fixed.z);
+      entity.lastUpdate = Date.now();
+    }
+  }
+
+  static handleNPCUpdate(msg) {
+    const entity = state.entities.get(msg.id);
+    if (entity) {
+      // Apply collision correction
+      const fixed = CollisionSystem.solveCollisions(msg.x, msg.z);
+      entity.target.set(fixed.x, CONFIG.PLAYER_HEIGHT / 2, fixed.z);
+      entity.lastUpdate = Date.now();
+    }
+  }
+
+  static handleChatMessage(msg) {
+    const isPrivate = msg.private || false;
+    const sender = state.entities.get(msg.from)?.name || 'Unknown';
+    const text = `${sender}: ${msg.text}`;
+    
+    UIManager.addChatMessage(text, isPrivate, false);
+  }
+
+  static handleScoreUpdate(msg) {
+    UIManager.updateScore(msg.score);
+    
+    if (msg.reason) {
+      const isPositive = msg.delta > 0;
+      UIManager.showNotification(
+        `${isPositive ? '+' : ''}${msg.delta} punten: ${msg.reason}`,
+        isPositive ? 'success' : 'error'
+      );
+    }
+  }
+
+  static handleReportResult(msg) {
+    if (msg.correct) {
+      state.stats.reportsCorrect++;
+      UIManager.showNotification(`Correct! ${msg.target} is een ${msg.type}`, 'success');
+    } else {
+      state.stats.reportsWrong++;
+      UIManager.showNotification(`Fout! ${msg.target} is een ${msg.type}`, 'error');
+    }
+    
+    this.updateStatsDisplay();
+  }
+
+  static handleStats(msg) {
+    state.stats.totalPlayers = msg.playerCount || 1;
+    this.updateStatsDisplay();
+  }
+
+  static updateStatsDisplay() {
+    document.getElementById('reports-correct').textContent = state.stats.reportsCorrect;
+    document.getElementById('reports-wrong').textContent = state.stats.reportsWrong;
+    
+    const total = state.stats.reportsCorrect + state.stats.reportsWrong;
+    const accuracy = total > 0 ? Math.round((state.stats.reportsCorrect / total) * 100) : 100;
+    document.getElementById('accuracy').textContent = `${accuracy}%`;
+    
+    document.getElementById('player-count').textContent = state.stats.totalPlayers;
+  }
 }
 
-// ------------------------------
-// UI wiring (join, chat input)
-// ------------------------------
-ui.nameInput.addEventListener('input', ()=>{
-  ui.startBtn.disabled = ui.nameInput.value.trim().length < 1;
-});
-ui.nameInput.addEventListener('keydown', (e)=>{
-  if (e.key === 'Enter' && !ui.startBtn.disabled) ui.startBtn.click();
-});
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN APPLICATION
+// ═══════════════════════════════════════════════════════════════════════════
 
-ui.startBtn.addEventListener('click', ()=>{
-  state.username = ui.nameInput.value.trim();
-  state.playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-  ui.overlay.style.display = 'none';
-  ui.loadingSpinner.style.display = 'block';
-  connectWS();
-  bootThree();
-});
+async function initGame() {
+  console.log('🎮 Initializing Social Credit Game...');
+  
+  // Setup UI
+  UIManager.initializeUI();
+  
+  // Get canvas
+  const canvas = document.createElement('canvas');
+  canvas.id = 'renderCanvas';
+  canvas.style.cssText = 'width: 100%; height: 100%; position: fixed; top: 0; left: 0; z-index: 1;';
+  document.body.insertBefore(canvas, document.body.firstChild);
+  
+  // Create engine
+  state.engine = new BABYLON.Engine(canvas, true, {
+    preserveDrawingBuffer: true,
+    stencil: true,
+    disableWebGL2Support: false
+  });
+  
+  // Create scene
+  state.scene = WorldGenerator.createEnhancedScene(state.engine, canvas);
+  
+  // Setup lighting
+  const { hemiLight, dirLight, shadowGenerator } = WorldGenerator.setupLighting(state.scene);
+  state.shadowGenerator = shadowGenerator;
+  
+  // Create ground
+  WorldGenerator.createGround(state.scene, shadowGenerator);
+  
+  // Create maze
+  await WorldGenerator.createMaze(state.scene, shadowGenerator);
+  
+  // Setup camera
+  state.camera = WorldGenerator.setupCamera(state.scene, canvas);
+  
+  // Setup post-processing
+  WorldGenerator.setupPostProcessing(state.scene, state.camera);
+  
+  // Create ambient particles
+  VisualEffects.createAmbientParticles(state.scene);
+  
+  // Setup input
+  InputManager.setupInput(canvas);
+  
+  // Chat input handler
+  ui.chatSendBtn.onclick = () => {
+    NetworkManager.sendChat(ui.chatInput.value);
+    ui.chatInput.value = '';
+  };
+  
+  ui.chatInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+      NetworkManager.sendChat(ui.chatInput.value);
+      ui.chatInput.value = '';
+    }
+  });
+  
+  // Connect to server
+  NetworkManager.connect();
+  
+  // Render loop
+  let lastTime = Date.now();
+  state.engine.runRenderLoop(() => {
+    const now = Date.now();
+    const dt = Math.min((now - lastTime) / 1000, 0.1);
+    lastTime = now;
+    
+    // Update movement
+    InputManager.tickMovement(dt);
+    
+    // Update entities
+    state.entities.forEach(entity => {
+      if (entity.id !== state.myId) {
+        EntityManager.updateEntity(entity, dt);
+      }
+    });
+    
+    // Update camera to follow player
+    if (state.player && state.player.node) {
+      state.camera.target = state.player.node.position;
+    }
+    
+    // Update minimap
+    UIManager.updateMinimap();
+    
+    // Render
+    state.scene.render();
+  });
+  
+  // Handle resize
+  window.addEventListener('resize', () => {
+    state.engine.resize();
+  });
+  
+  console.log('✅ Game initialized successfully!');
+  UIManager.showNotification('Welkom bij Social Credit Game!', 'success', 5000);
+}
 
-ui.sendBtn.onclick = () => {
-  const text = ui.msg.value.trim();
-  if (!text) return;
-  sendMessage(text);
-  ui.msg.value = '';
-};
-ui.msg.addEventListener('keydown', e=>{
-  if (e.key === 'Enter') ui.sendBtn.click();
-});
-
-// ------------------------------
-// Startup
-// ------------------------------
-addLine('SYSTEM:', 'Klaar om te verbinden — voer je naam in en klik “Systeem betreden”.', false, true);
+// Start game when DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initGame);
+} else {
+  initGame();
+}
