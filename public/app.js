@@ -1568,6 +1568,22 @@ async function initGame() {
   
   console.log('✅ Game initialized successfully!');
   UIManager.showNotification('Welkom bij Social Credit Game!', 'success', 5000);
+  
+  // Hide loading screen and show welcome modal
+  setTimeout(() => {
+    const loadingScreen = document.getElementById('loading-screen');
+    const welcomeModal = document.getElementById('welcome-modal');
+    
+    if (loadingScreen) {
+      console.log('🎬 Hiding loading screen');
+      loadingScreen.classList.add('hidden');
+    }
+    
+    if (welcomeModal) {
+      console.log('👋 Showing welcome modal');
+      welcomeModal.classList.remove('hidden');
+    }
+  }, 500);
 }
 
 // Start game when DOM is ready
