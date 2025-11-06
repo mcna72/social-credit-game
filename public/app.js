@@ -4,6 +4,8 @@
 // Enhanced beyond ChatGPT suggestions with production-ready features
 // ═══════════════════════════════════════════════════════════════════════════
 
+console.log('📦 Loading Social Credit Game...');
+
 const CONFIG = {
   SERVER_URL: window.location.origin.replace(/^http/, 'ws'),
   PLAYER_RADIUS: 0.45,
@@ -16,9 +18,13 @@ const CONFIG = {
   LOD_DISTANCE_MED: 60,
 };
 
+console.log('⚙️ Config loaded:', CONFIG);
+
 // ═══════════════════════════════════════════════════════════════════════════
 // STATE MANAGEMENT
 // ═══════════════════════════════════════════════════════════════════════════
+
+console.log('🔧 Initializing state...');
 
 const state = {
   ws: null,
@@ -38,6 +44,12 @@ const state = {
   achievements: [],
   activeQuests: [],
 };
+
+console.log('✅ State initialized:', {
+  hasEntities: !!state.entities,
+  entitiesType: state.entities.constructor.name,
+  entitiesSize: state.entities.size
+});
 
 const colliders = {
   walls: [],
@@ -921,14 +933,22 @@ class EntityManager {
   }
 
   static addEntity(id, name, x, z, isNPC, scene, shadowGenerator) {
-    // Safety check: ensure state.entities exists
-    if (!state.entities) {
-      console.error('❌ Cannot add entity - state.entities not initialized!');
+    console.log('🔧 addEntity called:', { id, name, x, z, isNPC, hasScene: !!scene, hasState: !!state, hasEntities: !!state.entities });
+    
+    // CRITICAL: Ensure state exists
+    if (typeof state === 'undefined') {
+      console.error('❌ CRITICAL: state object is undefined!');
       return null;
     }
     
+    // CRITICAL: Ensure state.entities exists, create if missing
+    if (!state.entities) {
+      console.warn('⚠️ state.entities was undefined, creating new Map()');
+      state.entities = new Map();
+    }
+    
     if (state.entities.has(id)) {
-      console.log('Entity already exists:', id);
+      console.log('ℹ️ Entity already exists:', id);
       return state.entities.get(id);
     }
     
@@ -939,13 +959,16 @@ class EntityManager {
     }
     
     try {
+      console.log('✨ Creating avatar for:', name);
       const node = this.createAvatar(scene, shadowGenerator, isNPC);
       node.position.set(x, CONFIG.PLAYER_HEIGHT / 2, z);
       
+      console.log('🏷️ Creating nametag for:', name);
       const nametag = this.createNameTag(name, scene);
       nametag.parent = node;
       
       // Apply spawn collision check
+      console.log('🔒 Applying collision check');
       const safePos = CollisionSystem.solveCollisions(x, z);
       node.position.x = safePos.x;
       node.position.z = safePos.z;
@@ -960,8 +983,9 @@ class EntityManager {
         lastUpdate: Date.now()
       };
       
+      console.log('💾 Saving entity to state.entities Map');
       state.entities.set(id, entity);
-      console.log('✅ Entity added:', name, id);
+      console.log('✅ Entity added successfully:', name, id, 'Total entities:', state.entities.size);
       
       // Spawn effect
       VisualEffects.createTeleportEffect(node.position, scene);
@@ -969,6 +993,7 @@ class EntityManager {
       return entity;
     } catch (err) {
       console.error('❌ Error adding entity:', err);
+      console.error('Stack trace:', err.stack);
       return null;
     }
   }
