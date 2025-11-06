@@ -872,7 +872,7 @@ class WorldGenerator {
 // ═══════════════════════════════════════════════════════════════════════════
 
 class EntityManager {
-  static async createAvatar(scene, shadowGenerator, isNPC = false) {
+  static createAvatar(scene, shadowGenerator, isNPC = false) {
     const avatar = BABYLON.MeshBuilder.CreateCapsule("avatar", {
       radius: CONFIG.PLAYER_RADIUS,
       height: CONFIG.PLAYER_HEIGHT,
