@@ -576,13 +576,14 @@ class UIManager {
     ctx.lineWidth = 2;
     ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
     
-    // Draw player (center)
+    // Draw player (center) - Green dot = you
     ctx.fillStyle = '#4CAF50';
     ctx.beginPath();
     ctx.arc(canvas.width / 2, canvas.height / 2, 5, 0, Math.PI * 2);
     ctx.fill();
     
-    // Draw other entities
+    // Draw other entities - ALL LOOK THE SAME (yellow dots)
+    // Mystery mode: You must figure out who's an NPC vs real player!
     state.entities.forEach((entity, id) => {
       if (!entity.node) return;
       
@@ -593,7 +594,8 @@ class UIManager {
       const z = canvas.height / 2 + dz * scale;
       
       if (x > 0 && x < canvas.width && z > 0 && z < canvas.height) {
-        ctx.fillStyle = entity.isNPC ? '#ff9800' : '#2196F3';
+        // Everyone looks the same - yellow dots (mystery!)
+        ctx.fillStyle = '#FFC107';
         ctx.beginPath();
         ctx.arc(x, z, 3, 0, Math.PI * 2);
         ctx.fill();
@@ -859,7 +861,7 @@ class WorldGenerator {
 // ═══════════════════════════════════════════════════════════════════════════
 
 class EntityManager {
-  static async createAvatar(scene, shadowGenerator) {
+  static async createAvatar(scene, shadowGenerator, isNPC = false) {
     const avatar = BABYLON.MeshBuilder.CreateCapsule("avatar", {
       radius: CONFIG.PLAYER_RADIUS,
       height: CONFIG.PLAYER_HEIGHT,
@@ -867,7 +869,14 @@ class EntityManager {
     }, scene);
     
     const mat = new BABYLON.PBRMaterial("avatarMat", scene);
-    mat.albedoColor = new BABYLON.Color3(0.2, 0.6, 1);
+    
+    // ALL AVATARS LOOK THE SAME - mystery colors (slight variation but not obvious)
+    // Everyone gets a random tint from a similar palette
+    const hue = 0.55 + (Math.random() * 0.1 - 0.05); // Around cyan/blue
+    const sat = 0.7 + (Math.random() * 0.2 - 0.1);
+    const light = 0.6 + (Math.random() * 0.2 - 0.1);
+    
+    mat.albedoColor = BABYLON.Color3.FromHSV(hue * 360, sat, light);
     mat.metallic = 0.1;
     mat.roughness = 0.6;
     mat.emissiveColor = new BABYLON.Color3(0.1, 0.3, 0.5);
@@ -912,7 +921,7 @@ class EntityManager {
   static addEntity(id, name, x, z, isNPC, scene, shadowGenerator) {
     if (state.entities.has(id)) return state.entities.get(id);
     
-    const node = this.createAvatar(scene, shadowGenerator);
+    const node = this.createAvatar(scene, shadowGenerator, isNPC);
     node.position.set(x, CONFIG.PLAYER_HEIGHT / 2, z);
     
     const nametag = this.createNameTag(name, scene);
