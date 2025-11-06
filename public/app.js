@@ -80,6 +80,11 @@ const ui = {
 
 class CollisionSystem {
   static circleAABBOverlap(x, z, r, box) {
+    // Safety check: ensure box exists and has valid bounds
+    if (!box || !box.min || !box.max) {
+      return false;
+    }
+    
     const cx = Math.max(box.min.x, Math.min(x, box.max.x));
     const cz = Math.max(box.min.z, Math.min(z, box.max.z));
     const dx = x - cx;
@@ -88,6 +93,11 @@ class CollisionSystem {
   }
 
   static resolveCircleAABB(x, z, r, box) {
+    // Safety check: ensure box exists and has valid bounds
+    if (!box || !box.min || !box.max) {
+      return { x, z };
+    }
+    
     const cx = Math.max(box.min.x, Math.min(x, box.max.x));
     const cz = Math.max(box.min.z, Math.min(z, box.max.z));
     let dx = x - cx;
