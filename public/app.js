@@ -872,9 +872,6 @@ class WorldGenerator {
 // ═══════════════════════════════════════════════════════════════════════════
 
 class EntityManager {
-  // Initialize the entities Map immediately when class is defined
-  static entities = state.entities;
-  
   static async createAvatar(scene, shadowGenerator, isNPC = false) {
     const avatar = BABYLON.MeshBuilder.CreateCapsule("avatar", {
       radius: CONFIG.PLAYER_RADIUS,
