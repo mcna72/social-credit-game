@@ -1,455 +1,737 @@
-// server.js — ESM versie (Render-friendly). Volledige game server met moderatie & IP-ban.
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import express from 'express';
-import http from 'http';
-import { WebSocketServer } from 'ws';
-import OpenAI from 'openai';
+// ═══════════════════════════════════════════════════════════════════════════
+// SOCIAL CREDIT GAME - ENHANCED SERVER
+// Professional multiplayer server with advanced features
+// ═══════════════════════════════════════════════════════════════════════════
 
-// ──────────────────────────────────────────────────────────────────────────────
-// ESM helpers
-// ──────────────────────────────────────────────────────────────────────────────
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const WebSocket = require('ws');
+const http = require('http');
+const express = require('express');
+const path = require('path');
 
-// ──────────────────────────────────────────────────────────────────────────────
-const app = express();
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
-
+// Configuration
 const PORT = process.env.PORT || 8080;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+const NPC_AMBIENT = process.env.NPC_AMBIENT === '1';
 
-// OpenAI client: init met env-key; via /admin/set-key kun je runtime wisselen
-let openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-let runtimeKey = null;
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Express
-// ──────────────────────────────────────────────────────────────────────────────
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(express.static(path.join(__dirname, 'public')));
-
-app.get('/healthz', (_req, res) => res.status(200).send('ok'));
-
-// Admin: runtime API key instellen
-app.post('/admin/set-key', (req, res) => {
-  const { password, apiKey } = req.body || {};
-  if (password !== ADMIN_PASSWORD) return res.status(401).json({ ok: false, error: 'Unauthorized' });
-  if (!apiKey || typeof apiKey !== 'string' || apiKey.length < 20) {
-    return res.status(400).json({ ok: false, error: 'Invalid key' });
-  }
-  runtimeKey = apiKey.trim();
-  openai = new OpenAI({ apiKey: runtimeKey });
-  console.log('[Admin] API key updated at runtime');
-  res.json({ ok: true });
-});
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Wereldstate
-// ──────────────────────────────────────────────────────────────────────────────
-const players = new Map(); // id -> { id, username, x, z, avatar, ws, joinedAt, chatHistory[] }
-const ipBan = new Set();   // ip’s die hard verbannen zijn (CSAM)
-
-// Een compacte set NPC’s die binnen ~80×80 blijven
-const npcs = [
-  { id: 'npc_yara',   name: 'Yara',   x: -30, z: 10, memory: [], targetX: -30, targetZ: 10 },
-  { id: 'npc_bram',   name: 'Bram',   x: 10,  z: -25, memory: [], targetX: 10,  targetZ: -25 },
-  { id: 'npc_fatima', name: 'Fatima', x: 35,  z: 15, memory: [], targetX: 35,  targetZ: 15 },
-  { id: 'npc_mehmet', name: 'Mehmet', x: -15, z: -20, memory: [], targetX: -15, targetZ: -20 },
-  { id: 'npc_anne',   name: 'Anne',   x: 20,  z: 30, memory: [], targetX: 20,  targetZ: 30 },
-  { id: 'npc_jan',    name: 'Jan',    x: -25, z: 25, memory: [], targetX: -25, targetZ: 25 }
-];
-
-// Weer/tijd
-let weatherState = {
-  type: 'clear',    // clear | cloudy | rain | fog
-  intensity: 0.7,
-  gameTime: 12.0    // 0..24
+const CONFIG = {
+  CHAT_RATE_LIMIT: 5,
+  CHAT_RATE_WINDOW: 10000,
+  MAX_CHAT_LENGTH: 400,
+  MAX_MOVE_DISTANCE: 10,
+  NPC_UPDATE_INTERVAL: 100,
+  NPC_THINK_INTERVAL: 5000,
+  WEATHER_UPDATE_INTERVAL: 300000,
+  MAZE_BOUNDS: { minX: -300, maxX: 300, minZ: -300, maxZ: 300 },
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Utils
-// ──────────────────────────────────────────────────────────────────────────────
-function wsSend(ws, obj) {
-  if (ws.readyState === 1) {
-    try { ws.send(JSON.stringify(obj)); } catch (e) { console.error('[send]', e.message); }
-  }
-}
-function broadcast(obj, exceptId = null) {
-  const msg = JSON.stringify(obj);
-  players.forEach(p => {
-    if (p.id !== exceptId && p.ws.readyState === 1) {
-      try { p.ws.send(msg); } catch (e) { console.error('[broadcast]', e.message); }
+// ═══════════════════════════════════════════════════════════════════════════
+// STATE MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════
+
+const gameState = {
+  players: new Map(),
+  npcs: new Map(),
+  chatHistory: [],
+  weather: { type: 'clear', time: 12 },
+  adminApiKey: null,
+};
+
+// Enhanced NPC personalities
+const NPC_TEMPLATES = [
+  {
+    id: 'npc_yara',
+    name: 'Yara',
+    personality: 'Vriendelijke kunstenaar die graag praat over creativiteit en cultuur. Optimistisch en nieuwsgierig.',
+    interests: ['kunst', 'muziek', 'cultuur', 'creativiteit'],
+    x: -10,
+    z: -10,
+  },
+  {
+    id: 'npc_bram',
+    name: 'Bram',
+    personality: 'Tech-savvy developer die gepassioneerd is over programmeren en innovatie. Analytisch maar toegankelijk.',
+    interests: ['technologie', 'programmeren', 'AI', 'gadgets'],
+    x: 10,
+    z: -10,
+  },
+  {
+    id: 'npc_fatima',
+    name: 'Fatima',
+    personality: 'Wijze filosofe die diepgaande gesprekken waardeert. Bedachtzaam en empathisch.',
+    interests: ['filosofie', 'ethiek', 'psychologie', 'literatuur'],
+    x: -10,
+    z: 10,
+  },
+  {
+    id: 'npc_mehmet',
+    name: 'Mehmet',
+    personality: 'Energieke ondernemer met passie voor business en sport. Competitief maar eerlijk.',
+    interests: ['business', 'sport', 'fitness', 'strategie'],
+    x: 10,
+    z: 10,
+  },
+  {
+    id: 'npc_anne',
+    name: 'Anne',
+    personality: 'Zorgzame verpleegster die graag anderen helpt. Geduldig en warm.',
+    interests: ['gezondheid', 'welzijn', 'natuur', 'koken'],
+    x: 0,
+    z: -15,
+  },
+  {
+    id: 'npc_jan',
+    name: 'Jan',
+    personality: 'Stoere bouwvakker met gevoel voor humor. Praktisch en down-to-earth.',
+    interests: ['vakmanschap', 'bouwen', 'voetbal', 'bier'],
+    x: 0,
+    z: 15,
+  },
+];
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SOCIAL CREDIT SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════
+
+class SocialCreditSystem {
+  static SCORES = {
+    POLITE: 10,
+    HELPFUL: 15,
+    CREATIVE: 20,
+    INAPPROPRIATE: -50,
+    ABUSE: -500,
+    CORRECT_REPORT: 50,
+    WRONG_REPORT: -30,
+    SPAM: -25,
+  };
+
+  static POLITE_WORDS = /\b(alstublieft|bedankt|dankjewel|dank je|graag gedaan|sorry|excuses|pardon|please|thank you|thanks|sorry)\b/i;
+  static ABUSE_KEYWORDS = /\b(martin vrijland|martinvrijland|idioot|klootzak|kanker|kut|hoer|fascist|racist)\b/i;
+
+  static calculateScore(text, context = {}) {
+    let delta = 0;
+    let reason = '';
+
+    // Check for politeness
+    if (this.POLITE_WORDS.test(text)) {
+      delta += this.SCORES.POLITE;
+      reason = 'Beleefde communicatie';
     }
-  });
-}
-const isNPC = id => npcs.some(n => n.id === id);
-const getNPC = id => npcs.find(n => n.id === id);
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Client-side regels willen we ook server-side afdwingen
-// ──────────────────────────────────────────────────────────────────────────────
-const VIP_RE       = /\b(martin\s*vrijland|vrijland|m\.?\s*v(ri)?jland|m\/v|\bmv\b|owner\s+of\s+the\s+site)\b/i;
-const POLITE_RE    = /\b(please|thank\s*you|thanks|alstublieft|alsjeblieft|dank je|dankjewel|graag|gracias|danke)\b/i;
-const RE_EMAIL     = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
-const RE_PHONE     = /\b(?:\+?\d{1,3}[\s-]?)?(?:\(?\d{2,4}\)?[\s-]?)?\d{3,4}[\s-]?\d{3,4}\b/;
-const RE_ADDRESS   = /\b(?:straat|laan|weg|plein|dorp|dreef|gracht|kade|avenue|road|street|st\.|boulevard)\b/i;
-const RE_SEXUAL    = /\b(porn|porno|sex|seks|horny|nsfw|nude|naakt|erotic)\b/i;
-const RE_CSAM      = /\b(child\s*sex|kinderporno|kinder porn|child porn|cp\b|underage\s*sex|minor\s*sex|sex\s*with\s*children|pedofil|pedo)\b/i;
+    // Check for abuse
+    if (this.ABUSE_KEYWORDS.test(text)) {
+      delta += this.SCORES.ABUSE;
+      reason = 'Ongepast taalgebruik';
+    }
 
-async function analyzeAndScore(text) {
-  // Basale regex regels + OpenAI moderatie
-  let delta = 0, reason = null, csam = false, sexual = false, sharePII = false;
+    // Check for spam (too many messages)
+    if (context.isSpam) {
+      delta += this.SCORES.SPAM;
+      reason = 'Spam detectie';
+    }
 
-  const lower = (text || '').toLowerCase();
+    return { delta, reason };
+  }
 
-  // Regex eerst
-  if (RE_CSAM.test(lower)) csam = true;
-  if (RE_SEXUAL.test(lower)) sexual = true;
-  if (RE_EMAIL.test(text) || RE_PHONE.test(text) || RE_ADDRESS.test(lower)) sharePII = true;
+  static async moderateWithOpenAI(text) {
+    if (!OPENAI_API_KEY && !gameState.adminApiKey) {
+      return { flagged: false, categories: {} };
+    }
 
-  try {
-    if (openai.apiKey) {
-      const mod = await openai.moderations.create({
-        model: 'omni-moderation-latest',
-        input: text
+    try {
+      const response = await fetch('https://api.openai.com/v1/moderations', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${gameState.adminApiKey || OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({ input: text }),
       });
-      const r = mod.results?.[0] || {};
-      const cats = r.categories || {};
 
-      // name rule enkel mits grof/gewelddadig/haat/harassment
-      if (VIP_RE.test(text) && (cats.harassment || cats.harassment_threats || cats.hate || cats.violence)) {
-        return { delta: -500, reason: 'Targeted abuse (name rule)', csam: false, sexual: false, sharePII: false };
-      }
-
-      if (r.flagged) {
-        // flagged → mild –50 (valt onder “inappropriate language”)
-        delta -= 50; reason = 'Inappropriate language';
-      } else if (POLITE_RE.test(text)) {
-        delta += 10; reason = 'Polite communication';
-      }
+      const data = await response.json();
+      return data.results[0];
+    } catch (err) {
+      console.error('Moderation error:', err);
+      return { flagged: false, categories: {} };
     }
-  } catch (e) {
-    console.error('[Moderation error]', e.message || e);
   }
 
-  // Extra regels (streng)
-  if (sharePII) { delta -= 50; reason = 'Dat soort vragen/gegevens worden hier niet getolereerd'; }
-  if (sexual)   { delta -= 500; reason = 'Seksueel getinte inhoud is niet toegestaan'; }
-  // CSAM → echte ban; delta laat ik op 0 (we kicken direct)
-  if (csam)     { reason = 'Verboden inhoud (kindermisbruik)'; }
+  static handleReport(reporterId, targetId) {
+    const reporter = gameState.players.get(reporterId);
+    const target = gameState.players.get(targetId) || gameState.npcs.get(targetId);
 
-  return { delta, reason, csam, sexual, sharePII };
-}
+    if (!reporter || !target) {
+      return { success: false };
+    }
 
-// ──────────────────────────────────────────────────────────────────────────────
-async function npcReply(npc, player, text) {
-  try {
-    const personas = {
-      Yara:   'You are Yara, a friendly Amsterdam local who loves art and cycling. Reply in the user’s language. Max 2 sentences.',
-      Bram:   'You are Bram, a pragmatic Amsterdammer who works in tech. Reply briefly in the user’s language. Max 2 sentences.',
-      Fatima: 'You are Fatima, a warm cafe owner in Amsterdam. Reply in the user’s language. Max 2 sentences.',
-      Mehmet: 'You are Mehmet, a thoughtful artist in Amsterdam. Reply in the user’s language, concise.',
-      Anne:   'You are Anne, a cheerful music-loving student in Amsterdam. Reply in the user’s language, concise.',
-      Jan:    'You are Jan, a retired teacher with dry humor. Reply in the user’s language, kind and brief.'
+    const isNPC = gameState.npcs.has(targetId);
+    const correct = !isNPC; // Correct if reporting a real player
+
+    const delta = correct ? this.SCORES.CORRECT_REPORT : this.SCORES.WRONG_REPORT;
+    reporter.score += delta;
+
+    return {
+      success: true,
+      correct: correct,
+      delta: delta,
+      targetName: target.name,
+      targetType: isNPC ? 'NPC' : 'speler',
     };
-    const persona = personas[npc.name] || `You are ${npc.name}, an Amsterdam local. Reply very briefly in the user's language.`;
-
-    npc.memory.push(`${player.username}: ${text}`);
-    if (npc.memory.length > 8) npc.memory.shift();
-
-    let content = 'Interessant... vertel me meer.';
-    if (openai.apiKey) {
-      const resp = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: persona },
-          ...npc.memory.slice(-6).map(t => ({ role: 'user', content: t })),
-          { role: 'user', content: `${player.username}: ${text}` }
-        ],
-        temperature: 0.7,
-        max_tokens: 80
-      });
-      content = resp.choices?.[0]?.message?.content?.trim() || content;
-    }
-
-    wsSend(player.ws, {
-      type: 'chat',
-      playerId: npc.id,
-      username: npc.name,
-      message: content,
-      private: true,
-      targetId: player.id
-    });
-  } catch (e) {
-    console.error('[NPC chat]', e.message || e);
   }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// NPC Beweging
-// ──────────────────────────────────────────────────────────────────────────────
-function updateNPCMovement() {
-  npcs.forEach(npc => {
-    if (!npc.nextMoveTime || Date.now() > npc.nextMoveTime) {
-      npc.targetX = (Math.random() - 0.5) * 80;
-      npc.targetZ = (Math.random() - 0.5) * 80;
-      npc.nextMoveTime = Date.now() + 10000 + Math.random() * 20000;
-    }
-    const dx = npc.targetX - npc.x;
-    const dz = npc.targetZ - npc.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist > 0.5) {
-      const speed = 0.05 + Math.random() * 0.03;
-      npc.x += (dx / dist) * speed;
-      npc.z += (dz / dist) * speed;
-    }
-  });
+// ═══════════════════════════════════════════════════════════════════════════
+// NPC AI SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════
 
-  broadcast({
-    type: 'npc_update',
-    npcs: npcs.map(n => ({ id: n.id, x: n.x, z: n.z }))
-  });
-}
-setInterval(updateNPCMovement, 100);
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Weer + Dag/Nacht
-// ──────────────────────────────────────────────────────────────────────────────
-function updateWeather() {
-  const weathers = ['clear', 'clear', 'clear', 'cloudy', 'rain', 'fog'];
-  weatherState.type = weathers[Math.floor(Math.random() * weathers.length)];
-  weatherState.intensity = Math.random() * 0.5 + 0.5;
-
-  broadcast({
-    type: 'weather_update',
-    weather: weatherState.type,
-    intensity: weatherState.intensity
-  });
-}
-setInterval(updateWeather, 300000 + Math.floor(Math.random()*600000)); // 5–15 min
-
-function updateDayNight() {
-  weatherState.gameTime += 0.1;
-  if (weatherState.gameTime >= 24) weatherState.gameTime = 0;
-  broadcast({ type: 'time_update', gameTime: weatherState.gameTime });
-}
-setInterval(updateDayNight, 60000);
-
-// ──────────────────────────────────────────────────────────────────────────────
-// WebSocket
-// ──────────────────────────────────────────────────────────────────────────────
-wss.on('connection', (ws, req) => {
-  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').toString();
-  if (ipBan.has(ip)) {
-    // Per direct verbreken als gebanned
-    try { ws.close(4001, 'banned'); } catch {}
-    return;
-  }
-
-  let me = null;
-  console.log(`[Connect] ${ip}`);
-
-  ws.on('message', async (raw) => {
-    let data; try { data = JSON.parse(raw); } catch { return; }
-
-    // JOIN
-    if (data.type === 'join') {
-      const { playerId, username, x=0, z=0, avatar } = data;
-      me = {
-        id: playerId,
-        username: (username || 'Anon').slice(0, 20),
-        x, z,
-        avatar: avatar || '🙂',
-        ws,
-        joinedAt: Date.now(),
-        chatHistory: []
+class NPCManager {
+  static initialize() {
+    NPC_TEMPLATES.forEach(template => {
+      const npc = {
+        id: template.id,
+        name: template.name,
+        personality: template.personality,
+        interests: template.interests,
+        x: template.x,
+        z: template.z,
+        targetX: template.x,
+        targetZ: template.z,
+        memory: [],
+        lastThink: Date.now(),
+        lastMove: Date.now(),
+        isMoving: false,
       };
-      players.set(me.id, me);
-      console.log(`[Join] ${me.username} (${me.id}) from ${ip}`);
 
-      wsSend(ws, {
-        type: 'init',
-        players: Array.from(players.values()).map(p => ({
-          id: p.id, username: p.username, x: p.x, z: p.z, avatar: p.avatar
-        })),
-        npcs: npcs.map(n => ({ id: n.id, name: n.name, x: n.x, z: n.z })),
-        weather: weatherState
+      gameState.npcs.set(template.id, npc);
+    });
+
+    // Start NPC movement loop
+    setInterval(() => this.updateNPCMovement(), CONFIG.NPC_UPDATE_INTERVAL);
+
+    // Start NPC thinking loop
+    if (NPC_AMBIENT) {
+      setInterval(() => this.npcThink(), CONFIG.NPC_THINK_INTERVAL);
+    }
+
+    console.log(`✅ Initialized ${gameState.npcs.size} NPCs`);
+  }
+
+  static updateNPCMovement() {
+    gameState.npcs.forEach(npc => {
+      const dx = npc.targetX - npc.x;
+      const dz = npc.targetZ - npc.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+
+      if (dist > 0.1) {
+        const speed = 2.5 * (CONFIG.NPC_UPDATE_INTERVAL / 1000);
+        const moveX = (dx / dist) * Math.min(speed, dist);
+        const moveZ = (dz / dist) * Math.min(speed, dist);
+
+        npc.x += moveX;
+        npc.z += moveZ;
+        npc.isMoving = true;
+
+        // Broadcast update
+        broadcast({
+          type: 'npc_update',
+          id: npc.id,
+          x: Math.round(npc.x * 100) / 100,
+          z: Math.round(npc.z * 100) / 100,
+        });
+      } else if (npc.isMoving) {
+        npc.isMoving = false;
+        // Pick new random target
+        this.setRandomTarget(npc);
+      }
+    });
+  }
+
+  static setRandomTarget(npc) {
+    const bounds = CONFIG.MAZE_BOUNDS;
+    const margin = 10;
+
+    npc.targetX = bounds.minX + margin + Math.random() * (bounds.maxX - bounds.minX - margin * 2);
+    npc.targetZ = bounds.minZ + margin + Math.random() * (bounds.maxZ - bounds.minZ - margin * 2);
+  }
+
+  static async npcThink() {
+    // Randomly select an NPC to speak
+    const npcs = Array.from(gameState.npcs.values());
+    if (npcs.length === 0) return;
+
+    const npc = npcs[Math.floor(Math.random() * npcs.length)];
+    const now = Date.now();
+
+    // Don't speak too often
+    if (now - npc.lastThink < CONFIG.NPC_THINK_INTERVAL) return;
+
+    npc.lastThink = now;
+
+    // Generate ambient chat
+    const context = this.getAmbientContext();
+    const message = await this.generateNPCResponse(npc, context, true);
+
+    if (message) {
+      broadcast({
+        type: 'chat_message',
+        from: npc.id,
+        text: message,
+        private: false,
+      });
+    }
+  }
+
+  static getAmbientContext() {
+    const weather = gameState.weather;
+    const playerCount = gameState.players.size;
+    const time = weather.time;
+
+    const contexts = [
+      `Het is ${time}:00 uur en het weer is ${weather.type}.`,
+      `Er zijn momenteel ${playerCount} spelers online.`,
+      'De stad is rustig vandaag.',
+      'Het doolhof is mysterieus.',
+    ];
+
+    return contexts[Math.floor(Math.random() * contexts.length)];
+  }
+
+  static async generateNPCResponse(npc, message, isAmbient = false) {
+    if (!OPENAI_API_KEY && !gameState.adminApiKey) {
+      // Fallback responses
+      const fallbacks = [
+        'Interessant!',
+        'Daar moet ik even over nadenken.',
+        'Ja, ik begrijp wat je bedoelt.',
+        'Dat is een goed punt.',
+      ];
+      return fallbacks[Math.floor(Math.random() * fallbacks.length)];
+    }
+
+    try {
+      const systemPrompt = isAmbient
+        ? `Je bent ${npc.name}. ${npc.personality} Maak een korte observatie over de omgeving. Max 50 woorden. In het Nederlands.`
+        : `Je bent ${npc.name}. ${npc.personality} Reageer natuurlijk op het bericht. Max 100 woorden. In het Nederlands of de taal van het bericht.`;
+
+      const messages = [
+        { role: 'system', content: systemPrompt },
+        ...npc.memory.slice(-5),
+      ];
+
+      if (!isAmbient) {
+        messages.push({ role: 'user', content: message });
+      } else {
+        messages.push({ role: 'user', content: message });
+      }
+
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${gameState.adminApiKey || OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: messages,
+          max_tokens: 150,
+          temperature: 0.8,
+        }),
       });
 
+      const data = await response.json();
+      const reply = data.choices[0]?.message?.content || '';
+
+      // Update memory
+      npc.memory.push({ role: 'user', content: message });
+      npc.memory.push({ role: 'assistant', content: reply });
+
+      // Keep memory limited
+      if (npc.memory.length > 20) {
+        npc.memory = npc.memory.slice(-20);
+      }
+
+      return reply;
+    } catch (err) {
+      console.error('NPC response error:', err);
+      return 'Sorry, ik kan nu niet reageren.';
+    }
+  }
+
+  static async handleChatToNPC(npcId, message, senderId) {
+    const npc = gameState.npcs.get(npcId);
+    const player = gameState.players.get(senderId);
+
+    if (!npc || !player) return;
+
+    const response = await this.generateNPCResponse(npc, message, false);
+
+    // Send back to player
+    if (player.ws && player.ws.readyState === WebSocket.OPEN) {
+      player.ws.send(JSON.stringify({
+        type: 'chat_message',
+        from: npcId,
+        text: response,
+        private: true,
+      }));
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLAYER MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════
+
+class PlayerManager {
+  static addPlayer(ws, name) {
+    const id = `player_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    const player = {
+      id: id,
+      name: name,
+      x: Math.random() * 20 - 10,
+      z: Math.random() * 20 - 10,
+      score: 0,
+      ws: ws,
+      lastMove: Date.now(),
+      chatTimes: [],
+      reportsCorrect: 0,
+      reportsWrong: 0,
+    };
+
+    gameState.players.set(id, player);
+    ws.playerId = id;
+
+    // Send init
+    ws.send(JSON.stringify({
+      type: 'init',
+      id: id,
+      name: name,
+      x: player.x,
+      z: player.z,
+      score: player.score,
+      players: Array.from(gameState.players.values()).map(p => ({
+        id: p.id,
+        name: p.name,
+        x: p.x,
+        z: p.z,
+      })),
+      npcs: Array.from(gameState.npcs.values()).map(n => ({
+        id: n.id,
+        name: n.name,
+        x: n.x,
+        z: n.z,
+      })),
+    }));
+
+    // Broadcast join
+    broadcast({
+      type: 'player_joined',
+      id: id,
+      name: name,
+      x: player.x,
+      z: player.z,
+    }, id);
+
+    this.broadcastStats();
+
+    console.log(`✅ Player joined: ${name} (${id})`);
+    return player;
+  }
+
+  static removePlayer(playerId) {
+    const player = gameState.players.get(playerId);
+    if (!player) return;
+
+    gameState.players.delete(playerId);
+
+    broadcast({
+      type: 'player_left',
+      id: playerId,
+    });
+
+    this.broadcastStats();
+
+    console.log(`👋 Player left: ${player.name} (${playerId})`);
+  }
+
+  static handleMove(playerId, x, z) {
+    const player = gameState.players.get(playerId);
+    if (!player) return;
+
+    // Anti-cheat: validate movement distance
+    const dx = x - player.x;
+    const dz = z - player.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+
+    if (dist > CONFIG.MAX_MOVE_DISTANCE) {
+      console.warn(`⚠️ Suspicious movement from ${player.name}: ${dist.toFixed(2)} units`);
+      return;
+    }
+
+    // Validate bounds
+    const bounds = CONFIG.MAZE_BOUNDS;
+    x = Math.max(bounds.minX, Math.min(bounds.maxX, x));
+    z = Math.max(bounds.minZ, Math.min(bounds.maxZ, z));
+
+    player.x = x;
+    player.z = z;
+    player.lastMove = Date.now();
+
+    // Broadcast movement
+    broadcast({
+      type: 'player_move',
+      id: playerId,
+      x: Math.round(x * 100) / 100,
+      z: Math.round(z * 100) / 100,
+    }, playerId);
+  }
+
+  static async handleChat(playerId, text, targetId) {
+    const player = gameState.players.get(playerId);
+    if (!player) return;
+
+    // Rate limiting
+    const now = Date.now();
+    player.chatTimes = player.chatTimes.filter(t => now - t < CONFIG.CHAT_RATE_WINDOW);
+
+    if (player.chatTimes.length >= CONFIG.CHAT_RATE_LIMIT) {
+      player.ws.send(JSON.stringify({
+        type: 'chat_message',
+        from: 'system',
+        text: '⚠️ Te veel berichten. Even wachten...',
+        private: false,
+      }));
+      return;
+    }
+
+    player.chatTimes.push(now);
+
+    // Validate length
+    text = text.slice(0, CONFIG.MAX_CHAT_LENGTH);
+
+    // Check moderation
+    const moderation = await SocialCreditSystem.moderateWithOpenAI(text);
+    const localScore = SocialCreditSystem.calculateScore(text, {
+      isSpam: player.chatTimes.length === CONFIG.CHAT_RATE_LIMIT,
+    });
+
+    if (moderation.flagged || localScore.delta < 0) {
+      player.score += localScore.delta;
+
+      player.ws.send(JSON.stringify({
+        type: 'score_update',
+        score: player.score,
+        delta: localScore.delta,
+        reason: localScore.reason || 'Moderatie waarschuwing',
+      }));
+    } else if (localScore.delta > 0) {
+      player.score += localScore.delta;
+
+      player.ws.send(JSON.stringify({
+        type: 'score_update',
+        score: player.score,
+        delta: localScore.delta,
+        reason: localScore.reason,
+      }));
+    }
+
+    // Handle NPC chat
+    if (targetId && gameState.npcs.has(targetId)) {
+      NPCManager.handleChatToNPC(targetId, text, playerId);
+      return;
+    }
+
+    // Broadcast chat
+    const isPrivate = !!targetId;
+
+    if (isPrivate) {
+      const target = gameState.players.get(targetId);
+      if (target && target.ws && target.ws.readyState === WebSocket.OPEN) {
+        target.ws.send(JSON.stringify({
+          type: 'chat_message',
+          from: playerId,
+          text: text,
+          private: true,
+        }));
+      }
+
+      // Echo back to sender
+      player.ws.send(JSON.stringify({
+        type: 'chat_message',
+        from: playerId,
+        text: text,
+        private: true,
+      }));
+    } else {
       broadcast({
-        type: 'player_joined',
-        player: { id: me.id, username: me.username, x: me.x, z: me.z, avatar: me.avatar }
-      }, me.id);
-      return;
+        type: 'chat_message',
+        from: playerId,
+        text: text,
+        private: false,
+      });
+    }
+  }
+
+  static handleReport(playerId, targetId) {
+    const result = SocialCreditSystem.handleReport(playerId, targetId);
+
+    if (!result.success) return;
+
+    const player = gameState.players.get(playerId);
+    if (!player) return;
+
+    if (result.correct) {
+      player.reportsCorrect++;
+    } else {
+      player.reportsWrong++;
     }
 
-    // Niet-join acties vereisen me
-    if (!me) return;
+    player.ws.send(JSON.stringify({
+      type: 'report_result',
+      correct: result.correct,
+      delta: result.delta,
+      target: result.targetName,
+      type: result.targetType,
+    }));
 
-    // MOVE (anti-cheat)
-    if (data.type === 'move') {
-      const newX = Number(data.x) || 0;
-      const newZ = Number(data.z) || 0;
-      const dx = newX - me.x;
-      const dz = newZ - me.z;
-      const dist = Math.hypot(dx, dz);
-      if (dist > 10) { // te ver/te snel
-        wsSend(ws, { type: 'position_correction', x: me.x, z: me.z });
-        return;
-      }
-      me.x = newX; me.z = newZ;
-      broadcast({ type: 'player_move', playerId: me.id, x: me.x, z: me.z }, me.id);
-      return;
+    player.ws.send(JSON.stringify({
+      type: 'score_update',
+      score: player.score,
+      delta: result.delta,
+      reason: result.correct ? 'Correct rapport' : 'Fout rapport',
+    }));
+  }
+
+  static broadcastStats() {
+    broadcast({
+      type: 'stats',
+      playerCount: gameState.players.size,
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WEATHER SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════
+
+class WeatherSystem {
+  static types = ['clear', 'cloudy', 'rain', 'fog'];
+
+  static initialize() {
+    this.updateWeather();
+    setInterval(() => this.updateWeather(), CONFIG.WEATHER_UPDATE_INTERVAL);
+  }
+
+  static updateWeather() {
+    gameState.weather.type = this.types[Math.floor(Math.random() * this.types.length)];
+    gameState.weather.time = Math.floor(Math.random() * 24);
+
+    broadcast({
+      type: 'weather_update',
+      weather: gameState.weather.type,
+      time: gameState.weather.time,
+    });
+
+    console.log(`🌤️ Weather updated: ${gameState.weather.type} at ${gameState.weather.time}:00`);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UTILITIES
+// ═══════════════════════════════════════════════════════════════════════════
+
+function broadcast(message, excludeId = null) {
+  const data = JSON.stringify(message);
+
+  gameState.players.forEach((player, id) => {
+    if (id !== excludeId && player.ws && player.ws.readyState === WebSocket.OPEN) {
+      player.ws.send(data);
     }
+  });
+}
 
-    // CHAT (publiek/privé) + moderatie
-    if (data.type === 'chat') {
-      const text = String(data.message || '').trim().slice(0, 400);
-      if (!text) return;
+// ═══════════════════════════════════════════════════════════════════════════
+// SERVER SETUP
+// ═══════════════════════════════════════════════════════════════════════════
 
-      // rate limit: max 5 berichten / 10s
-      const now = Date.now();
-      me.chatHistory = me.chatHistory.filter(t => now - t < 10000);
-      if (me.chatHistory.length >= 5) {
-        wsSend(ws, { type: 'system', message: 'Te snel! Wacht even voor het volgende bericht.' });
-        return;
-      }
-      me.chatHistory.push(now);
+const app = express();
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
-      // moderatie
-      const { delta, reason, csam, sexual, sharePII } = await analyzeAndScore(text);
+// Admin endpoint
+app.post('/admin/set-api-key', (req, res) => {
+  const { password, apiKey } = req.body;
 
-      if (csam) {
-        // IP-ban + disconnect + broadcast minimal
-        ipBan.add(ip);
-        try { ws.close(4002, 'csam'); } catch {}
-        console.warn(`[BAN] CSAM from ${me.username} @ ${ip} — permanently banned (memory)`);
-        return;
-      }
+  if (password !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Invalid password' });
+  }
 
-      if (delta) wsSend(ws, { type: 'penalty', amount: delta, reason });
+  gameState.adminApiKey = apiKey;
+  res.json({ success: true, message: 'API key updated' });
+});
 
-      // privé?
-      if (data.targetId) {
-        if (isNPC(data.targetId)) {
-          const npc = getNPC(data.targetId);
-          // echo naar speler (zodat hij eigen bericht ziet)
-          wsSend(ws, { type: 'chat', playerId: me.id, username: me.username, message: text, private: true, targetId: npc.id });
-          // npc antwoord
-          npcReply(npc, me, text);
-        } else {
-          const other = players.get(data.targetId);
-          if (other) {
-            const payload = { type: 'chat', playerId: me.id, username: me.username, message: text, private: true, targetId: other.id };
-            wsSend(other.ws, payload);
-            wsSend(ws, payload);
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+
+wss.on('connection', (ws) => {
+  console.log('🔌 New connection');
+
+  ws.on('message', (data) => {
+    try {
+      const msg = JSON.parse(data);
+
+      switch (msg.type) {
+        case 'join':
+          PlayerManager.addPlayer(ws, msg.name || 'Player');
+          break;
+
+        case 'move':
+          if (ws.playerId) {
+            PlayerManager.handleMove(ws.playerId, msg.x, msg.z);
           }
-        }
-      } else {
-        // publiek
-        const payload = { type: 'chat', playerId: me.id, username: me.username, message: text };
-        broadcast(payload);
-        wsSend(ws, payload);
+          break;
+
+        case 'chat':
+          if (ws.playerId) {
+            PlayerManager.handleChat(ws.playerId, msg.text, msg.target);
+          }
+          break;
+
+        case 'report':
+          if (ws.playerId) {
+            PlayerManager.handleReport(ws.playerId, msg.targetId);
+          }
+          break;
       }
-      return;
-    }
-
-    // REPORT
-    if (data.type === 'report') {
-      const reportedId = data.reportedId;
-      const correct = players.has(reportedId); // echte speler?
-      const reportedName = correct ? players.get(reportedId).username : (getNPC(reportedId)?.name || 'unknown');
-      console.log(`[Report] ${me.username} → ${reportedName} (${correct ? 'correct' : 'wrong'})`);
-      wsSend(ws, { type: 'report_result', correct, reportedName });
-      return;
-    }
-
-    // Voice signaling
-    if (data.type === 'voice_offer') {
-      const target = players.get(data.targetId);
-      if (target) wsSend(target.ws, { type:'voice_offer', fromId: me.id, offer: data.offer });
-      return;
-    }
-    if (data.type === 'voice_answer') {
-      const target = players.get(data.targetId);
-      if (target) wsSend(target.ws, { type:'voice_answer', fromId: me.id, answer: data.answer });
-      return;
-    }
-    if (data.type === 'voice_ice') {
-      const target = players.get(data.targetId);
-      if (target) wsSend(target.ws, { type:'voice_ice', fromId: me.id, candidate: data.candidate });
-      return;
-    }
-
-    // Emotes
-    if (data.type === 'emote') {
-      broadcast({ type: 'emote', playerId: me.id, emote: data.emote }, me.id);
-      return;
+    } catch (err) {
+      console.error('Message error:', err);
     }
   });
 
   ws.on('close', () => {
-    if (!me) return;
-    console.log(`[Disconnect] ${me.username} (${me.id})`);
-    players.delete(me.id);
-    broadcast({ type: 'player_left', playerId: me.id }, me.id);
+    if (ws.playerId) {
+      PlayerManager.removePlayer(ws.playerId);
+    }
   });
 
   ws.on('error', (err) => {
-    console.error('[WS Error]', err.message);
+    console.error('WebSocket error:', err);
   });
 });
 
-// Ambient NPC chatter (optioneel)
-if (process.env.NPC_AMBIENT === '1') {
-  setInterval(async () => {
-    const npc = npcs[Math.floor(Math.random() * npcs.length)];
-    const fallback = [
-      'Mooi weer vandaag, hè?',
-      'De grachten zijn zo rustig.',
-      'Gezellig hier!',
-      'Ik heb zin in koffie.',
-      'Prachtige stad.'
-    ];
-    let line = fallback[Math.floor(Math.random() * fallback.length)];
-    try {
-      if (openai.apiKey) {
-        const r = await openai.chat.completions.create({
-          model: 'gpt-4o-mini',
-          messages: [{ role:'system', content:`You are ${npc.name}, an Amsterdam local. Say one short neutral line about surroundings or weather. Max 10 words.` }],
-          max_tokens: 30, temperature: 0.7
-        });
-        line = r.choices?.[0]?.message?.content?.trim() || line;
-      }
-    } catch {}
-    broadcast({ type: 'chat', playerId: npc.id, username: npc.name, message: line });
-  }, 45000 + Math.floor(Math.random() * 45000));
-}
+// Initialize systems
+NPCManager.initialize();
+WeatherSystem.initialize();
 
-// Stats
-setInterval(() => {
-  console.log(`[Stats] Players: ${players.size}, NPCs: ${npcs.length}, Weather: ${weatherState.type}, Time: ${weatherState.gameTime.toFixed(1)}h, Bans: ${ipBan.size}`);
-}, 300000);
-
-// Start
+// Start server
 server.listen(PORT, () => {
-  console.log(`
-╔══════════════════════════════════════════════════════════╗
-║  Social Credit Game - Enhanced Edition (ESM)             ║
-║  Server listening on :${PORT}                             ║
-║  NODE_ENV: ${process.env.NODE_ENV || 'development'}                        ║
-╚══════════════════════════════════════════════════════════╝
-`);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('[Shutdown] Closing server gracefully...');
-  server.close(() => {
-    console.log('[Shutdown] Server closed');
-    process.exit(0);
-  });
+  console.log('═══════════════════════════════════════════════════════════');
+  console.log('🎮 SOCIAL CREDIT GAME - ENHANCED SERVER');
+  console.log('═══════════════════════════════════════════════════════════');
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🤖 NPCs initialized: ${gameState.npcs.size}`);
+  console.log(`🌤️ Weather system: ${gameState.weather.type}`);
+  console.log(`🔑 OpenAI API: ${OPENAI_API_KEY ? 'Configured' : 'Not configured'}`);
+  console.log(`🎙️ NPC ambient chat: ${NPC_AMBIENT ? 'Enabled' : 'Disabled'}`);
+  console.log('═══════════════════════════════════════════════════════════');
 });
